@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify that routing and browsing surfaces stay in sync with the skill.
 
-Ten drift classes, each of which has shipped before:
+Eleven drift classes, each of which has shipped before or breaks a distribution boundary:
 
 1. The SKILL.md frontmatter description is the only text an agent sees before
    deciding to load the skill — every visual type in the selection table must
@@ -23,6 +23,8 @@ Ten drift classes, each of which has shipped before:
    hardcoding a count that becomes stale when a type is added.
 10. The High-Level reproducibility checklist must agree with its canvas formula
    and retain sequential numbering.
+11. An immutable profile-only distribution must keep the policy packaged and
+   routed from every instruction surface that otherwise writes the checkout.
 """
 
 from __future__ import annotations
@@ -76,6 +78,7 @@ REQUIRED_PACKAGED_RUNTIME_FILES = frozenset(
         "scripts/self_check.py",
         "scripts/drawio_extract.py",
         "scripts/mermaid_extract.py",
+        "scripts/profile_state.py",
         "assets/template.html",
         "assets/template-dark.html",
         "assets/template-full.html",
@@ -237,6 +240,51 @@ def check_routing_surfaces(errors: list[str], root: Path) -> None:
         if reference_link not in path.read_text(encoding="utf-8"):
             errors.append(
                 f"routing surface does not route to {reference_link}: {relative.as_posix()}"
+            )
+
+
+def check_profile_only_policy(errors: list[str], root: Path) -> None:
+    """Require the immutable-install policy and all precedence routes."""
+    relative_policy = Path("skills/diagram-design/references/profile-only.md")
+    policy_path = root / relative_policy
+    if not policy_path.is_file():
+        errors.append(f"immutable profile-only policy is missing: {relative_policy.as_posix()}")
+        return
+
+    policy = policy_path.read_text(encoding="utf-8")
+    required_policy_terms = (
+        "byte-for-byte unchanged",
+        "~/.diagram-design/profiles/<slug>.md",
+        "<project-root>/.diagram-design",
+        "Never fall back",
+        "Safe marker I/O",
+        "lies inside it",
+        "symbolic link",
+        "O_NOFOLLOW",
+        "os.replace",
+        "profile_state.py",
+        "--expect",
+        "--create",
+    )
+    for term in required_policy_terms:
+        if term not in policy:
+            errors.append(f"profile-only policy lost required contract text: {term!r}")
+
+    routed_surfaces = (
+        Path("skills/diagram-design/SKILL.md"),
+        Path("skills/diagram-design/references/onboarding.md"),
+        Path("skills/diagram-design/references/profiles.md"),
+        Path("commands/profile.md"),
+        Path("prompts/profile.md"),
+        Path("README.md"),
+    )
+    for relative in routed_surfaces:
+        path = root / relative
+        if not path.is_file():
+            errors.append(f"profile-only routing surface is missing: {relative.as_posix()}")
+        elif "profile-only.md" not in path.read_text(encoding="utf-8"):
+            errors.append(
+                f"profile-only routing surface lost policy precedence: {relative.as_posix()}"
             )
 
 
@@ -454,6 +502,7 @@ def main() -> int:
     check_type_counts(errors, ROOT)
     check_high_level_reference(errors, HIGH_LEVEL_REFERENCE.read_text(encoding="utf-8"))
     check_routing_surfaces(errors, ROOT)
+    check_profile_only_policy(errors, ROOT)
     if errors:
         print("FAIL docs sync")
         for error in errors:
@@ -462,7 +511,8 @@ def main() -> int:
     print(
         "OK docs sync: description hooks, gallery reachability, README tree, "
         "reference links, packaged support files, routing surfaces, manifest descriptions, "
-        "Factory install contract, type-count routing, High-Level invariants"
+        "Factory install contract, type-count routing, High-Level invariants, "
+        "profile-only policy"
     )
     return 0
 

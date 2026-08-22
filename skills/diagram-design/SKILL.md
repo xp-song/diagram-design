@@ -18,6 +18,8 @@ Thirty-nine visual types. Semantic patterns describe behavior independently; typ
 
 **Before generating your first diagram in a new project, verify the style guide has been customized.**
 
+If [`references/profile-only.md`](references/profile-only.md) is present, load it first; its immutable-install policy overrides every working-copy write below or in onboarding/profile references and routes state I/O through [`scripts/profile_state.py`](scripts/profile_state.py).
+
 Don't silently ship default-skinned diagrams into a branded project.
 
 First check the project root for a `.diagram-design` marker and resolve it per [`references/profiles.md`](references/profiles.md). A valid marker whose profile exists selects that file directly and skips this gate; `profile: default` also skips it. A malformed or missing-profile marker follows the visible failure handling in that reference. Never copy a marker-selected profile over the installed working copy.

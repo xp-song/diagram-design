@@ -21,14 +21,97 @@ import sys
 from collections import Counter
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
 MOTION_TEMPLATE = SKILL_DIR / "assets" / "template-motion.html"
 MODES = {"none", "reveal", "step", "loop"}
 ACTIONS = {"play", "pause", "replay", "prev", "next"}
 ASCII_DECIMAL_RE = re.compile(r"^[0-9]+$")
-REFERENCE_ATTRS = {"src", "href", "xlink:href", "poster", "srcset", "action", "formaction"}
+REFERENCE_ATTRS = {
+    "src",
+    "href",
+    "xlink:href",
+    "poster",
+    "srcset",
+    "action",
+    "formaction",
+    "background",
+    "manifest",
+}
+CSS_VALUE_ATTRS = {
+    "style",
+    "fill",
+    "stroke",
+    "filter",
+    "clip-path",
+    "mask",
+    "marker",
+    "marker-start",
+    "marker-mid",
+    "marker-end",
+    "cursor",
+}
+CSS_IMPORT_RE = re.compile(r"@import\b", re.IGNORECASE)
+CSS_URL_RE = re.compile(r"url\(\s*([^)]+?)\s*\)", re.IGNORECASE)
+CSS_IMAGE_SET_RE = re.compile(r"(?:-webkit-)?image-set\s*\(", re.IGNORECASE)
+CSS_SRC_RE = re.compile(r"\bsrc\s*\(", re.IGNORECASE)
+CSS_IMAGE_RE = re.compile(r"\bimage\s*\(", re.IGNORECASE)
+CSS_ESCAPE_RE = re.compile(r"\\(?:([0-9a-fA-F]{1,6})\s?|(.))", re.DOTALL)
+SVG_DECLARATIVE_ANIMATION_TAGS = {
+    "animate",
+    "animatemotion",
+    "animatetransform",
+    "set",
+}
+INERT_OR_RAW_ANCESTORS = {
+    "template",
+    "noscript",
+    "noembed",
+    "noframes",
+    "textarea",
+    "title",
+    "xmp",
+    "plaintext",
+}
+DISALLOWED_PARSER_MODE_TAGS = {
+    "template",
+    "noembed",
+    "noframes",
+    "textarea",
+    "xmp",
+    "plaintext",
+    "select",
+    "frameset",
+}
+MOTION_TREE_CONSTRUCTION_TAGS = {
+    "form",
+    "table",
+    "tbody",
+    "thead",
+    "tfoot",
+    "tr",
+    "td",
+    "th",
+    "caption",
+    "colgroup",
+}
+HTML_VOID_TAGS = {
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "param",
+    "source",
+    "track",
+    "wbr",
+}
 
 
 class DiagramParser(HTMLParser):
@@ -41,7 +124,8 @@ class DiagramParser(HTMLParser):
         self.statuses: list[dict[str, str]] = []
         self.statuses_in_controls = 0
         self.scripts: list[dict[str, object]] = []
-        self.styles: list[str] = []
+        self.stylesheets: list[dict[str, object]] = []
+        self.css_values: list[str] = []
         self.svgs: list[dict[str, object]] = []
         self.unsafe: list[str] = []
         self.references: list[tuple[str, str, str]] = []
@@ -49,7 +133,7 @@ class DiagramParser(HTMLParser):
         self._current_svg: dict[str, object] | None = None
         self._capture: str | None = None
         self._current_script: dict[str, object] | None = None
-        self._in_style = False
+        self._current_style: dict[str, object] | None = None
         self._element_stack: list[str] = []
         self._motion_root_depth: int | None = None
         self._controls_depth: int | None = None
@@ -57,18 +141,64 @@ class DiagramParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.casefold()
         normalized_attrs = [(key.casefold(), value or "") for key, value in attrs]
-        data = {key: value for key, value in normalized_attrs}
+        data: dict[str, str] = {}
+        for key, value in normalized_attrs:
+            if key in data:
+                self.unsafe.append(f"duplicate attribute {key} on <{tag}> is not allowed")
+            else:
+                data[key] = value
         if tag in {"base", "embed", "object", "iframe"}:
             self.unsafe.append(f"<{tag}> is not allowed in a diagram file")
+        if tag in DISALLOWED_PARSER_MODE_TAGS:
+            self.unsafe.append(f"HTML parser-mode element <{tag}> is not allowed")
+        if self._motion_root_depth is not None and tag in MOTION_TREE_CONSTRUCTION_TAGS:
+            self.unsafe.append(
+                f"HTML tree-construction element <{tag}> is not allowed inside a motion root"
+            )
+        if tag in SVG_DECLARATIVE_ANIMATION_TAGS:
+            self.unsafe.append(f"SVG declarative animation <{tag}> is not allowed")
         for key, value in normalized_attrs:
             if key.startswith("on"):
                 self.unsafe.append(f"executable attribute {key} on <{tag}>")
             if key == "srcdoc":
                 self.unsafe.append(f"srcdoc attribute on <{tag}>")
+            if key == "srcset":
+                self.unsafe.append(f"srcset attribute on <{tag}> is not allowed")
+            if key == "imagesrcset":
+                self.unsafe.append(f"imagesrcset attribute on <{tag}> is not allowed")
+            if key == "ping":
+                self.unsafe.append(f"ping attribute on <{tag}> is not allowed")
+            if key == "attributionsrc":
+                self.unsafe.append(f"attributionsrc attribute on <{tag}> is not allowed")
+            if key == "xml:base":
+                self.unsafe.append(f"xml:base attribute on <{tag}> is not allowed")
             if key in REFERENCE_ATTRS:
                 self.references.append((tag, data.get("rel", ""), value))
+            if key in CSS_VALUE_ATTRS:
+                self.css_values.append(value)
+        inactive_context = any(
+            ancestor in INERT_OR_RAW_ANCESTORS for ancestor in self._element_stack
+        )
+        required_motion_attrs = {
+            "data-motion-root",
+            "data-motion-item",
+            "data-motion-action",
+            "data-motion-controls",
+            "data-motion-status",
+        }
+        if inactive_context and (
+            tag == "svg" or required_motion_attrs.intersection(data)
+        ):
+            self.unsafe.append(
+                f"required diagram element <{tag}> is inside browser-inert/raw-text markup"
+            )
+        if tag == "meta" and "http-equiv" in data:
+            self.unsafe.append("http-equiv <meta> is not allowed in a diagram file")
         if "data-motion-root" in data:
-            self.roots.append(data)
+            root = dict(data)
+            root["_tag"] = tag
+            root["_ancestors"] = "/".join(self._element_stack)
+            self.roots.append(root)
             if self._motion_root_depth is None:
                 self._motion_root_depth = len(self._element_stack)
         if self._motion_root_depth is not None:
@@ -88,13 +218,25 @@ class DiagramParser(HTMLParser):
             self._current_script = {
                 "attrs": data,
                 "attr_names": [name for name, _value in normalized_attrs],
+                "ancestors": tuple(self._element_stack),
                 "body": [],
                 "closed": False,
             }
             self.scripts.append(self._current_script)
         if tag == "style":
-            self._in_style = True
-        self._element_stack.append(tag)
+            if tuple(self._element_stack) not in {(), ("html", "head")}:
+                self.unsafe.append(
+                    "<style> must be top-level fragment content or a direct child of HTML <head>"
+                )
+            self._current_style = {
+                "attrs": data,
+                "ancestors": tuple(self._element_stack),
+                "body": [],
+                "closed": False,
+            }
+            self.stylesheets.append(self._current_style)
+        if tag not in HTML_VOID_TAGS:
+            self._element_stack.append(tag)
         if tag == "svg" and self._svg_depth == 0:
             self._svg_depth = 1
             self._current_svg = {"attrs": data, "first": None, "title": {}, "desc": {}}
@@ -109,23 +251,41 @@ class DiagramParser(HTMLParser):
                 self._current_svg[tag] = {"attrs": data, "text": ""}
                 self._capture = tag
 
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        normalized_tag = tag.casefold()
+        if (
+            self._svg_depth == 0
+            and normalized_tag not in HTML_VOID_TAGS
+            and normalized_tag != "svg"
+        ):
+            self.unsafe.append(
+                f"non-void HTML element <{normalized_tag}/> may not use self-closing syntax"
+            )
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
     def handle_endtag(self, tag: str) -> None:
         tag = tag.casefold()
         if tag == "script" and self._current_script is not None:
             self._current_script["closed"] = True
             self._current_script = None
-        if tag == "style":
-            self._in_style = False
+        if tag == "style" and self._current_style is not None:
+            self._current_style["closed"] = True
+            self._current_style = None
         if self._svg_depth:
             if tag in {"title", "desc"}:
                 self._capture = None
             self._svg_depth -= 1
             if self._svg_depth == 0:
                 self._current_svg = None
+        found = False
         for index in range(len(self._element_stack) - 1, -1, -1):
             if self._element_stack[index] == tag:
                 del self._element_stack[index:]
+                found = True
                 break
+        if not found and tag not in HTML_VOID_TAGS:
+            self.unsafe.append(f"closing tag </{tag}> has no matching open element")
         if (
             self._motion_root_depth is not None
             and len(self._element_stack) <= self._motion_root_depth
@@ -142,8 +302,10 @@ class DiagramParser(HTMLParser):
             body = self._current_script["body"]
             assert isinstance(body, list)
             body.append(data)
-        if self._in_style:
-            self.styles.append(data)
+        if self._current_style is not None:
+            body = self._current_style["body"]
+            assert isinstance(body, list)
+            body.append(data)
         if self._capture and self._current_svg:
             node = self._current_svg[self._capture]
             assert isinstance(node, dict)
@@ -158,21 +320,93 @@ def parsed_document(source: str) -> DiagramParser:
     parser = DiagramParser()
     parser.feed(source)
     parser.close()
+    if parser._element_stack:
+        parser.unsafe.append(
+            "unclosed HTML elements: " + ", ".join(parser._element_stack)
+        )
     return parser
+
+
+def ambiguous_markup_errors(source: str) -> list[str]:
+    """Reject constructs whose HTML5 parsing differs from Python HTMLParser."""
+    errors: list[str] = []
+    if re.search(r"<!\[", source, re.IGNORECASE):
+        errors.append("HTML marked-section syntax is not allowed")
+    title_openings = len(re.findall(r"<title\b", source, re.IGNORECASE))
+    title_blocks = len(
+        re.findall(
+            r"<title\b[^<>]*>[^<]*</title[ \t\n\f\r]*>",
+            source,
+            re.IGNORECASE,
+        )
+    )
+    if title_openings != title_blocks:
+        errors.append("<title> must contain plain text and a canonical closing tag")
+    noscript_openings = len(re.findall(r"<noscript\b", source, re.IGNORECASE))
+    noscript_blocks = len(
+        re.findall(
+            r"<noscript[ \t\n\f\r]*>[ \t\n\f\r]*<p>[^<]*</p>"
+            r"[ \t\n\f\r]*</noscript[ \t\n\f\r]*>",
+            source,
+            re.IGNORECASE,
+        )
+    )
+    if noscript_openings != noscript_blocks:
+        errors.append(
+            "<noscript> must contain exactly one plain-text paragraph and a canonical closing tag"
+        )
+    if re.search(
+        r"</\s+(?:style|script|title|textarea|xmp|iframe|noscript|noembed|noframes|plaintext)\b",
+        source,
+        re.IGNORECASE,
+    ):
+        errors.append("whitespace before a raw-text closing tag name is not allowed")
+    for closing in re.finditer(
+        r"</(?P<tag>style|script|title|textarea|xmp|iframe|noscript|noembed|noframes|plaintext)\b[^>]*>",
+        source,
+        re.IGNORECASE,
+    ):
+        tag = closing.group("tag")
+        if re.fullmatch(
+            rf"</{re.escape(tag)}[ \t\n\f\r]*>", closing.group(), re.IGNORECASE
+        ) is None:
+            errors.append(f"noncanonical raw-text closing tag </{tag}> is not allowed")
+    cursor = 0
+    while True:
+        opening = source.find("<!--", cursor)
+        if opening < 0:
+            break
+        if source.startswith("<!-->", opening) or source.startswith("<!--->", opening):
+            errors.append("abrupt HTML comment syntax is not allowed")
+        closing = source.find("-->", opening + 4)
+        if closing < 0:
+            errors.append("unclosed HTML comment is not allowed")
+            break
+        content = source[opening + 4 : closing]
+        if "<!--" in content or "--!>" in content or content.endswith("<!-"):
+            errors.append("ambiguous nested HTML comment syntax is not allowed")
+        cursor = closing + 3
+    return errors
 
 
 def is_approved_google_fonts_stylesheet(value: str) -> bool:
     try:
         parsed = urlparse(value)
+        port = parsed.port
     except ValueError:
         return False
+    query = parse_qsl(parsed.query, keep_blank_values=True)
     return (
         parsed.scheme == "https"
         and parsed.hostname is not None
         and parsed.hostname.casefold() == "fonts.googleapis.com"
-        and parsed.port is None
+        and parsed.username is None
+        and parsed.password is None
+        and port is None
         and parsed.path == "/css2"
         and not parsed.fragment
+        and any(key == "family" and item for key, item in query)
+        and all(key in {"family", "display"} for key, _item in query)
     )
 
 
@@ -182,19 +416,175 @@ def reference_error(tag: str, rel: str, value: str) -> str | None:
     if not stripped or stripped.startswith("#"):
         return None
     if lowered.startswith("javascript:") or lowered.startswith("data:text/html"):
-        return f"executable URL on <{tag}>: {stripped[:80]}"
-    remote = lowered.startswith(("http://", "https://", "//")) or (
-        ":" in stripped.split("/", 1)[0] and not lowered.startswith("data:")
-    )
-    if not remote:
-        if lowered.startswith("data:") and not lowered.startswith("data:image/"):
-            return f"non-image data URL on <{tag}>: {stripped[:80]}"
-        return None
+        return f"executable URL on <{tag}> is not allowed"
     if tag == "link" and "stylesheet" in rel.casefold().split():
         if is_approved_google_fonts_stylesheet(stripped):
             return None
-        return f"remote stylesheet is not the approved Google Fonts /css2 URL: {stripped[:80]}"
-    return f"remote reference on <{tag}>: {stripped[:80]}"
+        return "remote stylesheet is not the approved credential-free Google Fonts /css2 URL"
+    if lowered.startswith("data:"):
+        if re.match(r"data:image/(?:png|gif|jpeg|webp|avif);base64,", lowered):
+            return None
+        return f"unsupported data URL on <{tag}>"
+    return f"external reference on <{tag}> is not self-contained"
+
+
+def check_css_references(parser: DiagramParser, errors: list[str]) -> None:
+    stylesheet_bodies = []
+    for stylesheet in parser.stylesheets:
+        body = stylesheet["body"]
+        assert isinstance(body, list)
+        stylesheet_bodies.append("".join(body))
+    for source in (*stylesheet_bodies, *parser.css_values):
+        source = source.replace("\r\n", "\n").replace("\r", "\n").replace("\f", "\n")
+        source = source.replace("\0", "\N{REPLACEMENT CHARACTER}")
+        source = without_css_comments(source)
+        def decode_escape(match: re.Match[str]) -> str:
+            if match.group(1) is None:
+                return match.group(2)
+            codepoint = int(match.group(1), 16)
+            return chr(codepoint) if 0 < codepoint <= 0x10FFFF else "\N{REPLACEMENT CHARACTER}"
+
+        source = CSS_ESCAPE_RE.sub(decode_escape, source)
+        if CSS_IMPORT_RE.search(source):
+            errors.append("CSS @import is not allowed")
+        if CSS_IMAGE_SET_RE.search(source):
+            errors.append("CSS image-set() is not allowed")
+        if CSS_SRC_RE.search(source):
+            errors.append("CSS src() is not allowed")
+        if CSS_IMAGE_RE.search(source):
+            errors.append("CSS image() is not allowed")
+        for match in CSS_URL_RE.finditer(source):
+            value = match.group(1).strip().strip("'\"").strip()
+            if not value.startswith("#"):
+                errors.append("non-fragment CSS url() is not allowed")
+
+
+def without_css_comments(source: str, *, preserve_token_boundary: bool = False) -> str:
+    """Remove CSS comments while preserving quoted strings."""
+    output: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(source):
+        character = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if quote is not None:
+            output.append(character)
+            if character == "\\" and index + 1 < len(source):
+                index += 1
+                output.append(source[index])
+            elif character == quote:
+                quote = None
+        elif character in {"'", '"'}:
+            quote = character
+            output.append(character)
+        elif character == "/" and following == "*":
+            if preserve_token_boundary:
+                output.append(" ")
+            index += 2
+            while index < len(source) - 1 and source[index : index + 2] != "*/":
+                if preserve_token_boundary and source[index] in "\r\n":
+                    output.append(source[index])
+                index += 1
+            index += 1
+        else:
+            output.append(character)
+        index += 1
+    return "".join(output)
+
+
+def css_at_rule_blocks(source: str, header_pattern: str) -> list[str]:
+    """Return balanced bodies for matching CSS at-rules."""
+    blocks: list[str] = []
+    source = without_css_comments(source, preserve_token_boundary=True)
+    header = re.compile(header_pattern + r"\s*\{", re.IGNORECASE | re.ASCII)
+    depth = 0
+    paren_depth = 0
+    bracket_depth = 0
+    quote: str | None = None
+    top_level_content = False
+    index = 0
+    while index < len(source):
+        character = source[index]
+        if quote is not None:
+            if character == "\\" and index + 1 < len(source):
+                index += 1
+            elif character == quote:
+                quote = None
+        elif character in {"'", '"'}:
+            quote = character
+            if depth == 0:
+                top_level_content = True
+        elif character == "\\":
+            top_level_content = True
+            if index + 1 < len(source):
+                index += 1
+        elif character == "(":
+            paren_depth += 1
+            if depth == 0:
+                top_level_content = True
+        elif character == ")":
+            if paren_depth == 0:
+                return []
+            paren_depth -= 1
+        elif character == "[":
+            bracket_depth += 1
+            if depth == 0:
+                top_level_content = True
+        elif character == "]":
+            if bracket_depth == 0:
+                return []
+            bracket_depth -= 1
+        elif character == "{" and paren_depth == 0 and bracket_depth == 0:
+            depth += 1
+            if depth == 1:
+                top_level_content = False
+        elif character == "}" and paren_depth == 0 and bracket_depth == 0:
+            depth = max(0, depth - 1)
+            if depth == 0:
+                top_level_content = False
+        elif character == ";" and depth == 0 and paren_depth == 0 and bracket_depth == 0:
+            top_level_content = False
+        elif (
+            character == "@"
+            and depth == 0
+            and paren_depth == 0
+            and bracket_depth == 0
+            and not top_level_content
+        ):
+            match = header.match(source, index)
+            if match is not None:
+                block_depth = 1
+                cursor = match.end()
+                start = cursor
+                block_quote: str | None = None
+                while cursor < len(source) and block_depth:
+                    current = source[cursor]
+                    if block_quote is not None:
+                        if current == "\\" and cursor + 1 < len(source):
+                            cursor += 1
+                        elif current == block_quote:
+                            block_quote = None
+                    elif current in {"'", '"'}:
+                        block_quote = current
+                    elif current == "{":
+                        block_depth += 1
+                    elif current == "}":
+                        block_depth -= 1
+                    cursor += 1
+                if block_depth == 0:
+                    blocks.append(source[start : cursor - 1])
+                    index = cursor - 1
+                    top_level_content = False
+                else:
+                    top_level_content = True
+            else:
+                top_level_content = True
+        elif depth == 0 and character not in " \t\n\f\r":
+            top_level_content = True
+        index += 1
+    if quote is not None or depth != 0 or paren_depth != 0 or bracket_depth != 0:
+        return []
+    return blocks
 
 
 def canonical_controller() -> str:
@@ -253,7 +643,11 @@ def check_scripts(parser: DiagramParser, errors: list[str]) -> None:
         attrs = script["attrs"]
         attr_names = script["attr_names"]
         body = script["body"]
+        ancestors = script["ancestors"]
         assert isinstance(attrs, dict) and isinstance(attr_names, list) and isinstance(body, list)
+        assert isinstance(ancestors, tuple)
+        if ancestors != ("html", "body"):
+            errors.append(f"script {number} must be a direct child of body")
         if not script["closed"]:
             errors.append(f"script {number} must have a closing script tag")
         if attr_names != ["data-diagram-controls"] or attrs.get("data-diagram-controls") != "":
@@ -274,6 +668,8 @@ def check_motion(parser: DiagramParser, source: str, errors: list[str]) -> None:
         errors.append(f"expected exactly one data-motion-root; found {len(parser.roots)}")
         return
     root = parser.roots[0]
+    if root.get("_tag") != "main" or root.get("_ancestors") != "html/body":
+        errors.append("data-motion-root must be a direct-body <main> element")
     mode = root.get("data-motion-mode", "")
     if mode not in MODES:
         errors.append(f"data-motion-mode must be one of {sorted(MODES)}; got {mode!r}")
@@ -340,25 +736,66 @@ def check_motion(parser: DiagramParser, source: str, errors: list[str]) -> None:
         if not parser.scripts:
             errors.append("controlled mode needs the scoped control script")
 
-    style_source = "".join(parser.styles)
     if parser.scripts:
-        if re.search(r"prefers-reduced-motion\s*:\s*reduce", style_source, re.IGNORECASE) is None:
+        reduced_motion = False
+        print_fallback = False
+        for stylesheet in parser.stylesheets:
+            attrs = stylesheet["attrs"]
+            ancestors = stylesheet["ancestors"]
+            body = stylesheet["body"]
+            assert isinstance(attrs, dict)
+            assert isinstance(ancestors, tuple)
+            assert isinstance(body, list)
+            style_type = attrs.get("type", "").strip().casefold()
+            if (
+                not stylesheet["closed"]
+                or attrs.get("media", "").strip().casefold() not in {"", "all"}
+                or style_type not in {"", "text/css"}
+                or attrs.get("title", "").strip()
+                or "disabled" in attrs
+                or ancestors != ("html", "head")
+            ):
+                continue
+            style_source = "".join(body)
+            reduced_motion = reduced_motion or bool(
+                css_at_rule_blocks(
+                    style_source,
+                    r"@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)",
+                )
+            )
+            print_fallback = print_fallback or bool(
+                css_at_rule_blocks(style_source, r"@media\s+print\b")
+            )
+        if not reduced_motion:
             errors.append("missing reduced-motion CSS fallback (prefers-reduced-motion)")
-        if re.search(r"@media\s+print\b", style_source, re.IGNORECASE) is None:
+        if not print_fallback:
             errors.append("missing print CSS fallback (@media print)")
         if "<noscript" not in source.casefold():
             errors.append("motion file needs a <noscript> explanation of the complete static frame")
 
 
-def verify(path: Path) -> list[str]:
-    source = path.read_text(encoding="utf-8")
+def safety_errors(source: str) -> list[str]:
+    """Return the context-aware self-containment findings shared by repository lint."""
+    errors = ambiguous_markup_errors(source)
+    if errors:
+        return errors
     parser = parsed_document(source)
-    errors: list[str] = []
     errors.extend(parser.unsafe)
     for tag, rel, value in parser.references:
         finding = reference_error(tag, rel, value)
         if finding:
             errors.append(finding)
+    check_css_references(parser, errors)
+    return errors
+
+
+def verify(path: Path) -> list[str]:
+    source = path.read_text(encoding="utf-8")
+    preflight_errors = ambiguous_markup_errors(source)
+    if preflight_errors:
+        return preflight_errors
+    parser = parsed_document(source)
+    errors = safety_errors(source)
     check_svgs(parser, errors)
     check_scripts(parser, errors)
     check_motion(parser, source, errors)

@@ -71,6 +71,8 @@ jobs:
         run: |
           python scripts/test-lint-a11y.py
           python scripts/lint-skin.py --all --baseline
+          python scripts/test-self-check.py
+          python scripts/test-profile-state.py
 
   validate:
     name: Lint & Verify (${{ matrix.os }}, Python ${{ matrix.python-version }})
@@ -200,6 +202,11 @@ jobs:
         id: self_check
         run: python scripts/test-self-check.py
 
+      - name: Verify immutable profile state helper
+        if: always()
+        id: profile_state
+        run: python scripts/test-profile-state.py
+
       - name: Verify label geometry
         if: always()
         id: geometry
@@ -315,6 +322,7 @@ jobs:
           echo "| Docs & Routing Sync | ${{ steps.docs_sync.outcome == 'success' && '✅ Passed' || (steps.docs_sync.outcome == 'skipped' && '⏭️ Skipped' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Canonical Screenshot Freshness | ${{ steps.screenshots.outcome == 'success' && '✅ Passed' || (steps.screenshots.outcome == 'skipped' && '⏭️ Skipped' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Packaged Self-Check | ${{ steps.self_check.outcome == 'success' && '✅ Passed' || (steps.self_check.outcome == 'skipped' && '⏭️ Skipped' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Immutable Profile State | ${{ steps.profile_state.outcome == 'success' && '✅ Passed' || (steps.profile_state.outcome == 'skipped' && '⏭️ Skipped' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Label Geometry | ${{ steps.geometry.outcome == 'success' && '✅ Passed' || (steps.geometry.outcome == 'skipped' && '⏭️ Skipped' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Label Geometry Checker | ${{ steps.geometry_tests.outcome == 'success' && '✅ Passed' || (steps.geometry_tests.outcome == 'skipped' && '⏭️ Skipped' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Treemap Area & Label Fit | ${{ steps.treemap.outcome == 'success' && '✅ Passed' || (steps.treemap.outcome == 'skipped' && '⏭️ Skipped' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY

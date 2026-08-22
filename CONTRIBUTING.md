@@ -59,6 +59,7 @@ The helper refuses to run if the Claude and Codex versions already differ. If an
 | Docs/routing sync (description hooks, gallery, README tree, reference links, strict-bundler support paths, command/prompt surfaces) | `python3 scripts/verify-docs-sync.py && python3 scripts/test-verify-docs-sync.py` |
 | Canonical README screenshots match their example HTML sources and recorded PNG digests | `python3 scripts/verify-screenshot-freshness.py` |
 | Packaged output self-check behaves (pass + adversarial cases) | `python3 scripts/test-self-check.py` |
+| Immutable profile/marker state rejects symlinks, special files, and checkout overlap | `python3 scripts/test-profile-state.py` |
 | Label masks are never clipped by a node painted after them | `python3 scripts/verify-geometry.py --all` |
 | Label geometry checker behaves (pass + adversarial cases) | `python3 scripts/test-verify-geometry.py` |
 | Treemap cells match the values they are labelled with, and labels fit | `python3 scripts/verify-treemap.py --all` |
@@ -99,6 +100,7 @@ python3 scripts/test-plugin-package.py \
   && python3 scripts/test-verify-docs-sync.py \
   && python3 scripts/verify-screenshot-freshness.py \
   && python3 scripts/test-self-check.py \
+  && python3 scripts/test-profile-state.py \
   && python3 scripts/verify-geometry.py --all \
   && python3 scripts/test-verify-geometry.py \
   && python3 scripts/verify-treemap.py --all \
@@ -121,7 +123,7 @@ python3 scripts/test-plugin-package.py \
 - **`verify-geometry.py`:** a label mask overlaps a node declared later in the document, so the node fill clips the label at render time. Move the label to a free segment of its connector — keep the 6–10px gap from the stroke required by SKILL.md §6, and do not shrink the mask to sneak under the check.
 - **Icon assets:** you changed `scripts/vendor/icons/` or `scripts/build-icons.py` and the generated files went stale. Rerun `python3 scripts/build-icons.py` and commit the regenerated files.
 
-Do **not** add a file to `scripts/lint-skin-baseline.txt` to get your example through. The baseline exists only for legacy pre-2.0 examples that legitimately predate the current skin, and it still receives a11y checks.
+Do **not** add a file to `scripts/lint-skin-baseline.txt` to get your example through. The baseline exists only for legacy pre-2.0 examples that legitimately predate the current visual skin. It exempts visual findings only; accessibility, external-resource, and script-safety checks remain mandatory.
 
 ---
 

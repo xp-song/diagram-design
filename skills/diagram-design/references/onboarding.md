@@ -1,5 +1,9 @@
 # Onboarding — generate your skin from a design source
 
+> **Distribution override:** if [`profile-only.md`](profile-only.md) is present,
+> follow it for every write. Build the proposed guide in memory, save it directly
+> as a named home profile, and leave the installed `style-guide.md` unchanged.
+
 **Goal:** point the skill at a design source — a website, an installed skill, or a local folder — and have it extract the palette + typography, then rewrite `style-guide.md` so every future diagram inherits that skin.
 
 Takes about 60 seconds.

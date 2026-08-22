@@ -284,7 +284,7 @@ def main() -> int:
         require_lint_finding(
             "unclosed-motion-script",
             unclosed_svg + f"<script data-diagram-controls>{controller_body}\n",
-            "script: motion controller must have a closing script tag",
+            "external-asset: unclosed HTML elements: script",
             directory,
         )
         remote_svg = VALID_SVG.replace("fixture-title", "remote-script-title").replace(
@@ -294,7 +294,7 @@ def main() -> int:
             "remote-script",
             remote_svg
             + f'<script data-diagram-controls src="https://example.invalid/c.js">{controller_body}</script>\n',
-            "script: only the canonical data-diagram-controls attribute is allowed",
+            "external-asset: external reference on <script> is not self-contained",
             directory,
         )
         type_svg = VALID_SVG.replace("fixture-title", "script-type-title").replace(
@@ -326,7 +326,7 @@ def main() -> int:
             '<link rel="stylesheet" href="https://fonts.googleapis.com.evil.test/css2?family=Inter+Tight">\n'
             '<style>text { font-family: "Inter Tight", sans-serif; }</style>\n'
             + lookalike_svg,
-            "external-asset: external HTTP(S) <link> is not allowed",
+            "external-asset: remote stylesheet is not the approved credential-free Google Fonts /css2 URL",
             directory,
         )
         bad_path_svg = VALID_SVG.replace(
@@ -336,7 +336,21 @@ def main() -> int:
             "google-fonts-bad-path",
             '<link rel="stylesheet" href="https://fonts.googleapis.com/css2.evil?family=Inter+Tight">\n'
             + bad_path_svg,
-            "external-asset: external HTTP(S) <link> is not allowed",
+            "external-asset: remote stylesheet is not the approved credential-free Google Fonts /css2 URL",
+            directory,
+        )
+        require_lint_finding(
+            "google-fonts-credentials",
+            '<link rel="stylesheet" href="https://user:secret@fonts.googleapis.com/css2?family=Inter+Tight">\n'
+            + bad_path_svg,
+            "external-asset: remote stylesheet is not the approved credential-free Google Fonts /css2 URL",
+            directory,
+        )
+        require_lint_finding(
+            "google-fonts-unexpected-query",
+            '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight&amp;token=secret">\n'
+            + bad_path_svg,
+            "external-asset: remote stylesheet is not the approved credential-free Google Fonts /css2 URL",
             directory,
         )
         protocol_relative_svg = VALID_SVG.replace(
@@ -346,7 +360,7 @@ def main() -> int:
             "protocol-relative-font",
             '<link rel="stylesheet" href="//fonts.googleapis.com/css2?family=Inter+Tight">\n'
             + protocol_relative_svg,
-            "external-asset: external HTTP(S) <link> is not allowed",
+            "external-asset: remote stylesheet is not the approved credential-free Google Fonts /css2 URL",
             directory,
         )
         unquoted_remote_svg = VALID_SVG.replace(
@@ -356,7 +370,7 @@ def main() -> int:
             "unquoted-remote-link",
             '<link rel=stylesheet href=https://evil.example/x.css>\n'
             + unquoted_remote_svg,
-            "external-asset: external resource in <link> href is not allowed",
+            "external-asset: remote stylesheet is not the approved credential-free Google Fonts /css2 URL",
             directory,
         )
         bypass_svg = VALID_SVG.replace("fixture-title", "resource-bypass-title").replace(
@@ -366,7 +380,7 @@ def main() -> int:
             "srcset-second-candidate",
             '<img srcset="local.png 1x, https://evil.example/remote.png 2x">\n'
             + bypass_svg,
-            "external-asset: external resource in <img> srcset is not allowed",
+            "external-asset: srcset attribute on <img> is not allowed",
             directory,
         )
         require_lint_finding(
@@ -377,34 +391,104 @@ def main() -> int:
             directory,
         )
         require_lint_finding(
+            "escaped-css-url-function",
+            '<style>.x { background: u\\72l(https://tracker.example/x); }</style>\n'
+            + unquoted_remote_svg,
+            "external-asset: non-fragment CSS url() is not allowed",
+            directory,
+        )
+        require_lint_finding(
+            "escaped-css-import",
+            '<style>@\\69mport "https://tracker.example/x.css";</style>\n'
+            + unquoted_remote_svg,
+            "external-asset: CSS @import is not allowed",
+            directory,
+        )
+        require_lint_finding(
+            "relative-image-dependency",
+            '<img src="local.png">\n' + unquoted_remote_svg,
+            "external-asset: external reference on <img> is not self-contained",
+            directory,
+        )
+        require_lint_finding(
+            "meta-refresh",
+            '<meta http-equiv="refresh" content="0;url=local.html">\n'
+            + unquoted_remote_svg,
+            "external-asset: http-equiv <meta> is not allowed",
+            directory,
+        )
+        require_lint_finding(
+            "attribution-source",
+            '<img src="data:image/png;base64,AA==" attributionsrc="https://tracker.example/register">\n'
+            + unquoted_remote_svg,
+            "external-asset: attributionsrc attribute on <img> is not allowed",
+            directory,
+        )
+        require_lint_finding(
+            "svg-style-script-foreign-content",
+            unquoted_remote_svg.replace(
+                "</svg>",
+                "<style><script>document.documentElement.dataset.pwn='yes'</script></style></svg>",
+                1,
+            ),
+            "external-asset: <style> must be top-level fragment content or a direct child of HTML <head>",
+            directory,
+        )
+        require_lint_finding(
+            "svg-style-image-foreign-content",
+            unquoted_remote_svg.replace(
+                "</svg>",
+                '<style><image href="https://tracker.example/p.gif"></style></svg>',
+                1,
+            ),
+            "external-asset: <style> must be top-level fragment content or a direct child of HTML <head>",
+            directory,
+        )
+        require_lint_finding(
+            "malformed-marked-section-preflight",
+            unquoted_remote_svg + "<![]>",
+            "external-asset: HTML marked-section syntax is not allowed",
+            directory,
+        )
+        require_pass(
+            "visible-css-function-words",
+            "<p>image(example) and src(local) are ordinary visible text.</p>\n"
+            + unquoted_remote_svg.replace(
+                "unquoted-remote-title", "visible-css-function-words-title"
+            ).replace(
+                "unquoted-remote-desc", "visible-css-function-words-desc"
+            ),
+            directory,
+        )
+        require_lint_finding(
             "event-handler",
             '<div onclick="alert(1)"></div>\n' + bypass_svg,
-            "script: executable attribute onclick on <div> is not allowed",
+            "external-asset: executable attribute onclick on <div>",
             directory,
         )
         require_lint_finding(
             "javascript-url",
             '<iframe src="javascript:alert(1)"></iframe>\n' + bypass_svg,
-            "script: executable attribute src on <iframe> is not allowed",
+            "external-asset: <iframe> is not allowed in a diagram file",
             directory,
         )
         require_lint_finding(
             "javascript-control-character",
             '<iframe src="jav&#9;ascript:alert(1)"></iframe>\n' + bypass_svg,
-            "script: executable attribute src on <iframe> is not allowed",
+            "external-asset: <iframe> is not allowed in a diagram file",
             directory,
         )
         require_lint_finding(
             "base-href",
             '<base href="https://evil.example/">\n' + bypass_svg,
-            "script: executable attribute href on <base> is not allowed",
+            "external-asset: <base> is not allowed in a diagram file",
             directory,
         )
         require_lint_finding(
             "iframe-srcdoc",
             '<iframe srcdoc="&lt;script&gt;alert(1)&lt;/script&gt;"></iframe>\n'
             + bypass_svg,
-            "script: executable attribute srcdoc on <iframe> is not allowed",
+            "external-asset: <iframe> is not allowed in a diagram file",
             directory,
         )
         require_lint_finding(
@@ -544,7 +628,12 @@ def main() -> int:
         (project / "scripts").mkdir(parents=True)
         (project / "skills/diagram-design/assets").mkdir(parents=True)
         (project / "skills/diagram-design/references").mkdir(parents=True)
+        (project / "skills/diagram-design/scripts").mkdir(parents=True)
         shutil.copy2(LINTER, project / "scripts/lint-skin.py")
+        shutil.copy2(
+            ROOT / "skills/diagram-design/scripts/self_check.py",
+            project / "skills/diagram-design/scripts/self_check.py",
+        )
         shutil.copy2(
             ROOT / "skills/diagram-design/references/style-guide.md",
             project / "skills/diagram-design/references/style-guide.md",
@@ -581,7 +670,9 @@ def main() -> int:
             "example-baseline.html\n", encoding="utf-8"
         )
         (project / "skills/diagram-design/assets/example-baseline.html").write_text(
-            '<svg style="color: #123456"></svg>\n', encoding="utf-8"
+            '<img src="relative.png">\n<script>alert(1)</script>\n'
+            '<svg style="color: #123456"></svg>\n',
+            encoding="utf-8",
         )
         template_svg = VALID_SVG.replace(
             "fixture-title", "[diagram-slug]-title"
@@ -615,6 +706,16 @@ def main() -> int:
         if "color:" in baseline_result.stdout:
             raise AssertionError(
                 "baseline-a11y: legacy visual finding was not exempted\n"
+                f"{baseline_result.stdout}"
+            )
+        if "external-asset: external reference on <img> is not self-contained" not in baseline_result.stdout:
+            raise AssertionError(
+                "baseline-safety: relative asset escaped the baseline gate\n"
+                f"{baseline_result.stdout}"
+            )
+        if "script:" not in baseline_result.stdout:
+            raise AssertionError(
+                "baseline-safety: arbitrary script escaped the baseline gate\n"
                 f"{baseline_result.stdout}"
             )
         if "external-asset: external resource in <img> src is not allowed" not in baseline_result.stdout:
