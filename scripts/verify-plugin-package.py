@@ -12,14 +12,33 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_NAME = "diagram-design"
+CONTROLLED_REPOSITORY = "xp-song/diagram-design"
+CONTROLLED_REPOSITORY_URL = f"https://github.com/{CONTROLLED_REPOSITORY}"
 MANIFEST_PATHS = {
     "Claude": Path(".claude-plugin/plugin.json"),
-    "Codex": Path(".codex-plugin/plugin.json"),
     "Factory": Path(".factory-plugin/plugin.json"),
 }
 CLAUDE_MARKETPLACE = Path(".claude-plugin/marketplace.json")
-CODEX_MARKETPLACE = Path(".agents/plugins/marketplace.json")
 FACTORY_MARKETPLACE = Path(".factory-plugin/marketplace.json")
+MAINTAINER_POLICY = Path(".maintainer-policy.json")
+OPENAI_SKILL_METADATA = Path("skills/diagram-design/agents/openai.yaml")
+FORBIDDEN_NATIVE_CODEX_PATHS = (
+    Path(".codex-plugin"),
+    Path(".codex-plugin/plugin.json"),
+    Path(".agents/plugins"),
+    Path(".agents/plugins/marketplace.json"),
+)
+MAX_SKILL_DESCRIPTION_CHARS = 160
+OPENAI_METADATA_PATHS = frozenset(
+    {
+        ("interface",),
+        ("interface", "display_name"),
+        ("interface", "short_description"),
+        ("interface", "default_prompt"),
+        ("policy",),
+        ("policy", "allow_implicit_invocation"),
+    }
+)
 SHARED_MANIFEST_FIELDS = (
     "name",
     "description",
@@ -207,19 +226,13 @@ def verify_manifest_identity(manifests: dict[str, dict[str, Any]], errors: list[
 
 def verify_marketplaces(root: Path, errors: list[str]) -> None:
     claude_marketplace = load_json(root / CLAUDE_MARKETPLACE, errors)
-    codex_marketplace = load_json(root / CODEX_MARKETPLACE, errors)
     factory_marketplace = load_json(root / FACTORY_MARKETPLACE, errors)
-    if (
-        claude_marketplace is None
-        or codex_marketplace is None
-        or factory_marketplace is None
-    ):
+    if claude_marketplace is None or factory_marketplace is None:
         return
 
     claude_entry = find_plugin_entry(claude_marketplace, "Claude", errors)
-    codex_entry = find_plugin_entry(codex_marketplace, "Codex", errors)
     factory_entry = find_plugin_entry(factory_marketplace, "Factory", errors)
-    if claude_entry is None or codex_entry is None or factory_entry is None:
+    if claude_entry is None or factory_entry is None:
         return
 
     claude_root = resolve_local_path(root, claude_entry.get("source"), "Claude plugin source", errors)
@@ -227,40 +240,20 @@ def verify_marketplaces(root: Path, errors: list[str]) -> None:
         root, factory_entry.get("source"), "Factory plugin source", errors
     )
 
-    codex_source = codex_entry.get("source")
-    if not isinstance(codex_source, dict) or codex_source.get("source") != "local":
-        errors.append("Codex plugin source must be an object with source='local'")
-        codex_root = None
-    else:
-        codex_root = resolve_local_path(root, codex_source.get("path"), "Codex plugin source.path", errors)
-
-    policy = codex_entry.get("policy")
-    if not isinstance(policy, dict):
-        errors.append("Codex marketplace entry must include a policy object")
-    else:
-        if policy.get("installation") != "AVAILABLE":
-            errors.append("Codex policy.installation must be 'AVAILABLE'")
-        if policy.get("authentication") != "ON_INSTALL":
-            errors.append("Codex policy.authentication must be 'ON_INSTALL'")
-    if not isinstance(codex_entry.get("category"), str) or not codex_entry.get("category"):
-        errors.append("Codex marketplace entry must include a category")
-
     if claude_root is not None and not (claude_root / MANIFEST_PATHS["Claude"]).is_file():
         errors.append("Claude marketplace target does not contain .claude-plugin/plugin.json")
-    if codex_root is not None and not (codex_root / MANIFEST_PATHS["Codex"]).is_file():
-        errors.append("Codex marketplace target does not contain .codex-plugin/plugin.json")
     if factory_root is not None and not (factory_root / MANIFEST_PATHS["Factory"]).is_file():
         errors.append("Factory marketplace target does not contain .factory-plugin/plugin.json")
 
     plugin_roots = [
         plugin_root
-        for plugin_root in (claude_root, codex_root, factory_root)
+        for plugin_root in (claude_root, factory_root)
         if plugin_root is not None
     ]
     if plugin_roots and any(plugin_root != plugin_roots[0] for plugin_root in plugin_roots[1:]):
-        errors.append("Claude, Codex, and Factory marketplaces must package the same plugin root")
+        errors.append("Claude and Factory marketplaces must package the same plugin root")
 
-    plugin_root = codex_root or claude_root or factory_root
+    plugin_root = claude_root or factory_root
     if plugin_root is None:
         return
     skill = plugin_root / "skills" / PLUGIN_NAME / "SKILL.md"
@@ -271,13 +264,61 @@ def verify_marketplaces(root: Path, errors: list[str]) -> None:
         errors.append("packaged commands are missing from the shared plugin root")
 
 
-def verify_codex_skill_path(root: Path, codex_manifest: dict[str, Any], errors: list[str]) -> None:
-    skills_root = resolve_local_path(root, codex_manifest.get("skills"), "Codex manifest skills", errors)
-    if skills_root is None:
-        return
-    skill = skills_root / PLUGIN_NAME / "SKILL.md"
-    if not skill.is_file():
-        errors.append(f"Codex skills path does not contain {PLUGIN_NAME}/SKILL.md")
+def has_forbidden_yaml_codepoint(value: str) -> bool:
+    """Reject code points outside YAML 1.2's printable character ranges."""
+    def allowed(char: str) -> bool:
+        codepoint = ord(char)
+        # Codex's serde_yaml/libyaml stack treats these YAML-printable code
+        # points as line breaks. Reject them to keep this dependency-free
+        # verifier and every supported host on the same document structure.
+        if codepoint in {0x85, 0x2028, 0x2029}:
+            return False
+        return (
+            0x20 <= codepoint <= 0x7E
+            or 0xA0 <= codepoint <= 0xD7FF
+            or 0xE000 <= codepoint <= 0xFFFD
+            or 0x10000 <= codepoint <= 0x10FFFF
+        )
+
+    return any(not allowed(char) for char in value)
+
+
+def has_forbidden_yaml_source_codepoint(value: str) -> bool:
+    """Validate a complete YAML document before line splitting consumes controls."""
+    return any(
+        char not in "\r\n" and has_forbidden_yaml_codepoint(char)
+        for char in value
+    )
+
+
+def split_yaml_lines(value: str) -> list[str]:
+    """Split only YAML structural CR/LF breaks, never printable Unicode content."""
+    return re.split(r"\r\n|\r|\n", value)
+
+
+def valid_plain_yaml_scalar(value: str) -> bool:
+    """Accept only the conservative single-line plain-scalar subset we emit."""
+    if not value or has_forbidden_yaml_codepoint(value):
+        return False
+    if value[0] in "-?:,[]{}#&*!|>'\"%@`":
+        return False
+    if value in {"~", "null", "Null", "NULL"}:
+        return False
+    if any(char in value for char in "[]{}") or re.search(r":(?:\s|$)", value):
+        return False
+    return True
+
+
+def is_quoted_yaml_string(value: str) -> bool:
+    """Return true only for the quoted scalar forms this strict subset accepts."""
+    if value.startswith('"'):
+        return valid_double_quoted_yaml_scalar(value)
+    if value.startswith("'"):
+        return (
+            re.fullmatch(r"'[^']*'(?:\s+#.*)?", value) is not None
+            and not has_forbidden_yaml_codepoint(value)
+        )
+    return False
 
 
 def valid_double_quoted_yaml_scalar(value: str) -> bool:
@@ -286,6 +327,8 @@ def valid_double_quoted_yaml_scalar(value: str) -> bool:
     if match is None:
         return False
     body = match.group("body")
+    if has_forbidden_yaml_codepoint(body):
+        return False
     simple_escapes = set('0abtnvfre "\\/N_LP')
     index = 0
     while index < len(body):
@@ -303,7 +346,8 @@ def valid_double_quoted_yaml_scalar(value: str) -> bool:
         encoded = body[index + 1 : index + 1 + digits]
         if len(encoded) != digits or re.fullmatch(r"[0-9A-Fa-f]+", encoded) is None:
             return False
-        if int(encoded, 16) > 0x10FFFF:
+        codepoint = int(encoded, 16)
+        if codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
             return False
         index += 1 + digits
     return True
@@ -318,12 +362,14 @@ def parse_frontmatter_metadata_version(text: str) -> str | None:
     skill's frontmatter uses and fails closed on malformed structure, duplicate
     keys, collection syntax, or malformed scalar values instead of guessing.
     """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
+    if has_forbidden_yaml_source_codepoint(text):
+        return None
+    lines = split_yaml_lines(text)
+    if not lines or lines[0] != "---":
         return None
     try:
         closing = next(
-            index for index in range(1, len(lines)) if lines[index].strip() == "---"
+            index for index in range(1, len(lines)) if lines[index] == "---"
         )
     except StopIteration:
         return None
@@ -376,9 +422,12 @@ def parse_frontmatter_metadata_version(text: str) -> str | None:
                 if not valid_double_quoted_yaml_scalar(value):
                     return None
             elif value[0] == "'":
-                if re.fullmatch(r"'[^']*'(?:\s+#.*)?", value) is None:
+                if (
+                    re.fullmatch(r"'[^']*'(?:\s+#.*)?", value) is None
+                    or has_forbidden_yaml_codepoint(value)
+                ):
                     return None
-            elif ": " in value:
+            elif not valid_plain_yaml_scalar(value):
                 return None
 
         entries.append((parent, key, value))
@@ -432,6 +481,213 @@ def verify_skill_metadata_version(root: Path, manifests: dict[str, dict[str, Any
         )
 
 
+def parse_simple_yaml_paths(
+    text: str, *, frontmatter: bool
+) -> dict[tuple[str, ...], str] | None:
+    """Parse the small nested-mapping YAML subset used by invocation metadata."""
+    if has_forbidden_yaml_source_codepoint(text):
+        return None
+    lines = split_yaml_lines(text)
+    if frontmatter:
+        if not lines or lines[0] != "---":
+            return None
+        try:
+            closing = next(
+                index for index in range(1, len(lines)) if lines[index] == "---"
+            )
+        except StopIteration:
+            return None
+        lines = lines[1:closing]
+
+    paths: dict[tuple[str, ...], str] = {}
+    parents: list[tuple[int, str]] = []
+    for raw_line in lines:
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        if "\t" in raw_line:
+            return None
+        match = re.fullmatch(
+            r"(?P<indent> *)(?P<key>[A-Za-z_][\w.-]*):(?P<value>(?: +.*)?)",
+            raw_line,
+        )
+        if match is None:
+            return None
+        indent = len(match.group("indent"))
+        while parents and indent <= parents[-1][0]:
+            parents.pop()
+        if indent and (not parents or indent != parents[-1][0] + 2):
+            return None
+        if not indent and parents:
+            return None
+
+        key = match.group("key")
+        path = tuple(parent for _, parent in parents) + (key,)
+        if path in paths:
+            return None
+        value = match.group("value").strip()
+        if value:
+            if value[0] == '"':
+                if not valid_double_quoted_yaml_scalar(value):
+                    return None
+            elif value[0] == "'":
+                if (
+                    re.fullmatch(r"'[^']*'(?:\s+#.*)?", value) is None
+                    or has_forbidden_yaml_codepoint(value)
+                ):
+                    return None
+            elif not valid_plain_yaml_scalar(value):
+                return None
+        paths[path] = value
+        if not value:
+            parents.append((indent, key))
+    return paths
+
+
+def verify_explicit_invocation_policy(root: Path, errors: list[str]) -> None:
+    """Keep the packaged skill user-invoked across generic and Codex runtimes."""
+    skill = root / "skills" / PLUGIN_NAME / "SKILL.md"
+    try:
+        skill_text = skill.read_text(encoding="utf-8")
+    except OSError as exc:
+        errors.append(f"could not read {skill.relative_to(root)}: {exc}")
+        return
+
+    skill_paths = parse_simple_yaml_paths(skill_text, frontmatter=True)
+    if skill_paths is None:
+        errors.append("SKILL.md frontmatter is not valid invocation-policy YAML")
+        return
+    if skill_paths.get(("disable-model-invocation",)) != "true":
+        errors.append(
+            "SKILL.md must declare disable-model-invocation: true in frontmatter"
+        )
+    if skill_paths.get(("user-invocable",)) != "true":
+        errors.append("SKILL.md must declare user-invocable: true in frontmatter")
+    if skill_paths.get(("metadata", "invocation")) != "manual":
+        errors.append(
+            "SKILL.md metadata.invocation must be manual"
+        )
+    description = skill_paths.get(("description",), "")
+    if not description:
+        errors.append("SKILL.md frontmatter description must be non-empty")
+    elif len(description) > MAX_SKILL_DESCRIPTION_CHARS:
+        errors.append(
+            "SKILL.md frontmatter description must stay compact for selectors "
+            f"and host compatibility (maximum {MAX_SKILL_DESCRIPTION_CHARS} characters)"
+        )
+
+    openai_path = root / OPENAI_SKILL_METADATA
+    try:
+        openai_text = openai_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        errors.append(f"could not read {OPENAI_SKILL_METADATA}: {exc}")
+        return
+    openai_paths = parse_simple_yaml_paths(openai_text, frontmatter=False)
+    if openai_paths is None:
+        errors.append(f"{OPENAI_SKILL_METADATA} is not valid invocation-policy YAML")
+        return
+    actual_paths = frozenset(openai_paths)
+    if actual_paths != OPENAI_METADATA_PATHS:
+        unexpected = sorted(".".join(path) for path in actual_paths - OPENAI_METADATA_PATHS)
+        missing = sorted(".".join(path) for path in OPENAI_METADATA_PATHS - actual_paths)
+        errors.append(
+            f"{OPENAI_SKILL_METADATA} must use the exact minimal metadata schema; "
+            f"unexpected={unexpected}, missing={missing}"
+        )
+    for field in ("display_name", "short_description"):
+        value = openai_paths.get(("interface", field), "")
+        if not value or not is_quoted_yaml_string(value):
+            errors.append(
+                f"{OPENAI_SKILL_METADATA} interface.{field} must be a quoted scalar string"
+            )
+    if openai_paths.get(("policy", "allow_implicit_invocation")) != "false":
+        errors.append(
+            f"{OPENAI_SKILL_METADATA} policy.allow_implicit_invocation must be false"
+        )
+    default_prompt = openai_paths.get(("interface", "default_prompt"), "")
+    if not default_prompt.startswith(f'"${PLUGIN_NAME} '):
+        errors.append(
+            f"{OPENAI_SKILL_METADATA} interface.default_prompt must explicitly "
+            f"invoke ${PLUGIN_NAME}"
+        )
+
+
+def verify_direct_codex_distribution(root: Path, errors: list[str]) -> None:
+    """Prevent reintroducing a native plugin that conflicts with the shared flag."""
+    for relative in FORBIDDEN_NATIVE_CODEX_PATHS:
+        candidate = root / relative
+        if candidate.exists() or candidate.is_symlink():
+            errors.append(
+                f"{relative} must remain absent; Codex consumes the canonical "
+                "skill directly so Claude/Pi user-only metadata stays intact"
+            )
+
+
+def verify_maintainer_version_policy(root: Path, errors: list[str]) -> None:
+    """Keep automated maintainer versioning aligned with the package gate."""
+    policy = load_json(root / MAINTAINER_POLICY, errors)
+    if policy is None:
+        return
+    versioning = policy.get("versioning")
+    entries = versioning.get("manifests") if isinstance(versioning, dict) else None
+    if not isinstance(entries, list):
+        errors.append(f"{MAINTAINER_POLICY} versioning.manifests must be an array")
+        return
+    actual = {
+        entry.get("path")
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+    }
+    expected = {relative.as_posix() for relative in MANIFEST_PATHS.values()}
+    if actual != expected or len(entries) != len(expected):
+        errors.append(
+            f"{MAINTAINER_POLICY} versioning manifests must match the package gate; "
+            f"expected={sorted(expected)}, actual={sorted(actual)}"
+        )
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("json_pointer") != "/version":
+            errors.append(
+                f"{MAINTAINER_POLICY} every versioning manifest must target /version"
+            )
+
+
+def verify_controlled_fork_origin(
+    root: Path, manifests: dict[str, dict[str, Any]], errors: list[str]
+) -> None:
+    """Keep every install surface pinned to the reviewed fork identity."""
+    for label, manifest in manifests.items():
+        if manifest.get("repository") != CONTROLLED_REPOSITORY_URL:
+            errors.append(
+                f"{label} manifest repository must remain {CONTROLLED_REPOSITORY_URL!r}"
+            )
+
+    policy = load_json(root / MAINTAINER_POLICY, errors)
+    if policy is not None and policy.get("repository") != CONTROLLED_REPOSITORY:
+        errors.append(
+            f"{MAINTAINER_POLICY} repository must remain {CONTROLLED_REPOSITORY!r}"
+        )
+
+    readme_path = root / "README.md"
+    try:
+        readme = readme_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        errors.append(f"could not read {readme_path}: {exc}")
+        return
+    required_install_surfaces = (
+        f"/plugin marketplace add {CONTROLLED_REPOSITORY}",
+        f"git clone {CONTROLLED_REPOSITORY_URL}.git",
+        "~/.agents/skills/diagram-design",
+        "$HOME\\.agents\\skills\\diagram-design",
+        f"droid plugin marketplace add {CONTROLLED_REPOSITORY_URL}",
+        f"pi install {CONTROLLED_REPOSITORY_URL}",
+        f"git clone git@github.com:{CONTROLLED_REPOSITORY}.git",
+    )
+    for command in required_install_surfaces:
+        if command not in readme:
+            errors.append(
+                f"README controlled-fork install surface is missing {command!r}"
+            )
+
+
 def verify_package(root: Path, base_ref: str) -> list[str]:
     errors: list[str] = []
     manifests: dict[str, dict[str, Any]] = {}
@@ -444,7 +700,10 @@ def verify_package(root: Path, base_ref: str) -> list[str]:
         verify_versions(root, base_ref, manifests, errors)
         verify_manifest_identity(manifests, errors)
         verify_skill_metadata_version(root, manifests, errors)
-        verify_codex_skill_path(root, manifests["Codex"], errors)
+        verify_explicit_invocation_policy(root, errors)
+        verify_controlled_fork_origin(root, manifests, errors)
+    verify_direct_codex_distribution(root, errors)
+    verify_maintainer_version_policy(root, errors)
     verify_marketplaces(root, errors)
     return errors
 
@@ -462,7 +721,7 @@ def main() -> int:
         return 1
     versions = load_json(ROOT / MANIFEST_PATHS["Claude"], [])["version"]
     print(
-        f"OK plugin package: Claude, Codex, and Factory {versions}, "
+        f"OK plugin package: Claude and Factory {versions}, "
         f"marketplace paths, and packaged skill"
     )
     return 0

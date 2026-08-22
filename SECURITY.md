@@ -8,7 +8,9 @@ forks are not maintained as separate security-support channels.
 
 ## Report a vulnerability privately
 
-Please use [GitHub private vulnerability reporting](https://github.com/cathrynlavery/diagram-design/security/advisories/new).
+Please use [GitHub private vulnerability reporting](https://github.com/xp-song/diagram-design/security/advisories/new)
+for vulnerabilities in this controlled fork. Report vulnerabilities that affect
+the upstream project independently to its own security channel.
 Do not disclose a suspected vulnerability in a public issue, pull request,
 discussion, or social-media post before we have coordinated disclosure.
 

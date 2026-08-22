@@ -3,18 +3,16 @@
 
 Eleven drift classes, each of which has shipped before or breaks a distribution boundary:
 
-1. The SKILL.md frontmatter description is the only text an agent sees before
-   deciding to load the skill — every visual type in the selection table must
-   keep a lexical hook there.
+1. The SKILL.md frontmatter description stays compact for selectors and
+   conservative host compatibility even though invocation is explicit-only.
 2. The gallery (assets/index.html) must reach every shipped example, and every
    gallery tab must point at a file that exists.
 3. Every concrete file named in README.md's architecture tree must exist.
 4. Every relative references/*.md link in SKILL.md must resolve.
 5. Claude and Pi command/prompt surfaces must route to the matching reference.
-6. The plugin manifests repeat the SKILL.md description verbatim. They are the
-   text a user reads *before installing*, so by ADR 0004's own argument they
-   need every type's lexical hook too - and nothing else notices when they
-   drift, because they are four separate copies of one sentence.
+6. The plugin manifests are the detailed pre-install discovery surface, so each
+   long description keeps every type's lexical hook independently of the compact
+   runtime skill description.
 7. Factory Droid's README install commands and native manifest path must agree
    with the package metadata instead of becoming a second hand-maintained API.
 8. Every support path a strict skill bundler can extract from SKILL.md must be
@@ -48,6 +46,52 @@ DESCRIPTION_ALIASES = {
     "bar chart": "bar",
     "line chart": "line",
     "scatter plot": "scatter",
+}
+MAX_SKILL_DESCRIPTION_CHARS = 160
+DISCOVERY_VOCABULARY = {
+    "draw.io import": ("draw.io", ".drawio"),
+    "Mermaid import": ("mermaid",),
+    "branding": ("brand", "branding"),
+    "semantic patterns": ("semantic pattern", "semantic patterns"),
+    "callouts": ("callout", "callouts"),
+    "motion": ("motion", "animation"),
+    "sketchy styling": ("sketchy", "hand-drawn"),
+}
+EXPLICIT_POLICY_DOCS = (
+    Path("README.md"),
+    Path("CONTRIBUTING.md"),
+    Path("docs/adr/0010-explicit-only-skill-invocation.md"),
+    Path("docs/adr/0007-new-layout-grammars.md"),
+    Path("docs/superpowers/specs/2026-08-18-polar-chart-design.md"),
+    Path("docs/superpowers/plans/2026-08-18-polar-chart.md"),
+)
+STALE_RUNTIME_DESCRIPTION_PHRASES = (
+    "do not remove routing vocabulary from frontmatter",
+    "type's name to the frontmatter `description`",
+    "SKILL.md description loses a type's lexical hook",
+    "never by trimming the frontmatter description",
+    "SKILL.md visual-type guide and frontmatter description",
+    "Add `polar/radial lollipop` to the frontmatter description.",
+    "When a request matches, it loads `SKILL.md`",
+    ".codex-plugin/plugin.json",
+)
+REQUIRED_EXPLICIT_POLICY_PHRASES = {
+    Path("README.md"): (
+        "Diagram Design is user-invoked only.",
+        "an ordinary matching prompt does not load it.",
+        "Diagram Design is explicit-only: invoke the skill by name when you want it.",
+        "~/.agents/skills/diagram-design",
+        "$HOME\\.agents\\skills\\diagram-design",
+    ),
+    Path("CONTRIBUTING.md"): (
+        "compact explicit-only runtime metadata",
+        "Keep the runtime frontmatter description under its compact explicit-only budget",
+    ),
+    Path("docs/adr/0010-explicit-only-skill-invocation.md"): (
+        "Diagram Design is user-invoked only:",
+        "Ordinary natural-language prompts do not promise to activate Diagram Design.",
+        "policy.allow_implicit_invocation: false",
+    ),
 }
 ROUTING_SURFACES = {
     Path("commands/export-diagram.md"): "references/export.md",
@@ -117,19 +161,16 @@ def check_description(errors: list[str]) -> None:
     if not description:
         errors.append("SKILL.md frontmatter description is missing")
         return
+    if len(frontmatter_description(markdown)) > MAX_SKILL_DESCRIPTION_CHARS:
+        errors.append(
+            "SKILL.md frontmatter description exceeds the compact selector "
+            f"budget of {MAX_SKILL_DESCRIPTION_CHARS} characters"
+        )
     types = selection_table_types(markdown)
     if len(types) != VISUAL_TYPE_COUNT:
         errors.append(
             f"expected {VISUAL_TYPE_COUNT} visual types in the selection table; found {len(types)}"
         )
-    for name in types:
-        key = normalized(name)
-        key = DESCRIPTION_ALIASES.get(key, key)
-        if key not in description:
-            errors.append(
-                f"description lost the lexical hook for type {name!r} "
-                f"(expected {key!r} in the SKILL.md frontmatter description)"
-            )
 
 
 def gallery_types(source: str) -> list[str]:
@@ -432,7 +473,6 @@ def check_high_level_reference(errors: list[str], markdown: str) -> None:
 MANIFEST_DESCRIPTIONS = (
     (Path(".claude-plugin/plugin.json"), ("description",)),
     (Path(".claude-plugin/marketplace.json"), ("description",)),
-    (Path(".codex-plugin/plugin.json"), ("description", "longDescription")),
     (FACTORY_MANIFEST, ("description",)),
 )
 
@@ -456,9 +496,6 @@ def find_key(node: object, key: str) -> str | None:
 
 def check_manifest_descriptions(errors: list[str], root: Path) -> None:
     markdown = SKILL.read_text(encoding="utf-8")
-    description = normalized(frontmatter_description(markdown))
-    if not description:
-        return
     types = selection_table_types(markdown)
     for relative, keys in MANIFEST_DESCRIPTIONS:
         path = root / relative
@@ -474,18 +511,57 @@ def check_manifest_descriptions(errors: list[str], root: Path) -> None:
             text = normalized(value)
             for name in types:
                 hook = DESCRIPTION_ALIASES.get(normalized(name), normalized(name))
-                if hook not in text:
+                if not contains_lexical_hook(text, hook):
                     errors.append(
                         f"{relative.as_posix()} {key!r} lost the lexical hook for "
-                        f"type {name!r} (expected {hook!r}) — it must name every "
-                        f"type the SKILL.md description names"
+                        f"type {name!r} (expected {hook!r}) — detailed marketplace "
+                        f"descriptions must name every supported type"
                     )
+            for label in missing_discovery_vocabulary(text):
+                errors.append(
+                    f"{relative.as_posix()} {key!r} lost required discovery "
+                    f"vocabulary for {label}"
+                )
+
+
+def missing_discovery_vocabulary(text: str) -> list[str]:
+    searchable = normalized(text)
+    return [
+        label
+        for label, aliases in DISCOVERY_VOCABULARY.items()
+        if not any(contains_lexical_hook(searchable, alias) for alias in aliases)
+    ]
+
+
+def contains_lexical_hook(text: str, hook: str) -> bool:
+    """Match a discovery hook as a term, not inside another type name."""
+    searchable = normalized(text)
+    term = normalized(hook)
+    return re.search(rf"(?<!\w){re.escape(term)}(?!\w)", searchable) is not None
+
+
+def check_explicit_invocation_docs(errors: list[str], root: Path) -> None:
+    for relative in EXPLICIT_POLICY_DOCS:
+        source = (root / relative).read_text(encoding="utf-8")
+        for phrase in STALE_RUNTIME_DESCRIPTION_PHRASES:
+            if phrase in source:
+                errors.append(
+                    f"{relative.as_posix()} retains stale runtime-description "
+                    f"guidance: {phrase!r}"
+                )
+        for phrase in REQUIRED_EXPLICIT_POLICY_PHRASES.get(relative, ()):
+            if phrase not in source:
+                errors.append(
+                    f"{relative.as_posix()} lost required explicit-invocation "
+                    f"guidance: {phrase!r}"
+                )
 
 
 def main() -> int:
     errors: list[str] = []
     check_description(errors)
     check_manifest_descriptions(errors, ROOT)
+    check_explicit_invocation_docs(errors, ROOT)
     check_factory_install_surface(errors, ROOT)
     check_gallery(errors)
     check_readme_tree(errors)
@@ -509,7 +585,8 @@ def main() -> int:
             print(f"  - {error}")
         return 1
     print(
-        "OK docs sync: description hooks, gallery reachability, README tree, "
+        "OK docs sync: compact runtime description, marketplace discovery hooks, "
+        "explicit-invocation docs, gallery reachability, README tree, "
         "reference links, packaged support files, routing surfaces, manifest descriptions, "
         "Factory install contract, type-count routing, High-Level invariants, "
         "profile-only policy"

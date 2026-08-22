@@ -113,7 +113,7 @@ The v2.5.10 release added the final ten types above. Compare their light, dark, 
 **Claude Code:**
 
 ```text
-/plugin marketplace add cathrynlavery/diagram-design
+/plugin marketplace add xp-song/diagram-design
 /plugin install diagram-design@diagram-design
 ```
 
@@ -122,16 +122,29 @@ Then enable updates once: run `/plugin`, open **Marketplaces**, select **diagram
 **Codex:**
 
 ```bash
-codex plugin marketplace add cathrynlavery/diagram-design
-codex plugin add diagram-design@diagram-design
+git clone https://github.com/xp-song/diagram-design.git ~/code/diagram-design
+DIAGRAM_APPROVED_SHA="paste-the-approved-40-character-sha"
+git -C ~/code/diagram-design checkout "$DIAGRAM_APPROVED_SHA"
+mkdir -p ~/.agents/skills
+ln -s ~/code/diagram-design/skills/diagram-design ~/.agents/skills/diagram-design
 ```
 
-Codex refreshes configured Git marketplaces at startup. To fetch immediately, run `codex plugin marketplace upgrade diagram-design` and start a new session.
+On native Windows PowerShell, clone and pin the same fork, then create a directory junction:
+
+```powershell
+git clone https://github.com/xp-song/diagram-design.git "$HOME\code\diagram-design"
+$DiagramApprovedSha = "paste-the-approved-40-character-sha"
+git -C "$HOME\code\diagram-design" checkout $DiagramApprovedSha
+New-Item -ItemType Directory -Force "$HOME\.agents\skills"
+New-Item -ItemType Junction -Path "$HOME\.agents\skills\diagram-design" -Target "$HOME\code\diagram-design\skills\diagram-design"
+```
+
+Pin the checkout to a reviewed commit and start a new Codex session after installing or updating it. This repository intentionally exposes Diagram Design to Codex as a direct user skill, not a native Codex plugin: Codex's plugin validator rejects the generic `disable-model-invocation: true` flag required to keep the same canonical skill user-only in Claude Code and Pi. Codex enforces the equivalent boundary through `agents/openai.yaml` and `allow_implicit_invocation: false`.
 
 **Factory Droid:**
 
 ```bash
-droid plugin marketplace add https://github.com/cathrynlavery/diagram-design
+droid plugin marketplace add https://github.com/xp-song/diagram-design
 droid plugin install diagram-design@diagram-design --scope user
 ```
 
@@ -142,28 +155,46 @@ Droid tracks Git plugins by commit rather than the manifest's display version. T
 **Pi:**
 
 ```bash
-pi install https://github.com/cathrynlavery/diagram-design
+pi install https://github.com/xp-song/diagram-design
 ```
 
-Run `/reload` in an open Pi session. Pi makes the skill available for matching diagram requests; use `/skill:diagram-design` to invoke it explicitly. Pi also loads the `/export-diagram`, `/import-mermaid`, `/profile`, and `/doctor` prompt templates. The unpinned Git install is intentional: Pi has no automatic package refresh, so run `pi update --extensions` to pull merged updates.
+Run `/reload` in an open Pi session, then use `/skill:diagram-design` to invoke the skill. Pi also loads the `/export-diagram`, `/import-mermaid`, `/profile`, and `/doctor` prompt templates. The unpinned Git install is intentional: Pi has no automatic package refresh, so run `pi update --extensions` to pull merged updates.
 
-> **One-time migration:** an existing standalone `npx skills add` copy will not start following the Codex marketplace automatically. Remove that standalone copy, then use the Codex marketplace commands above. Likewise, uninstall a personal Cowork copy and reinstall Diagram Design from your organization's marketplace. Future marketplace version bumps then flow through each client's native update path.
+> **One-time migration:** remove any native Codex plugin installation before linking the direct user skill above; do not keep both surfaces active. Likewise, uninstall a personal Cowork copy and reinstall Diagram Design from your organization's marketplace. Claude and Factory plugin version bumps continue through their native update paths; direct Codex skill updates follow the pinned checkout.
 
 ### Editable install
 
 Managed installs are convenient, but changes to `references/style-guide.md` may be replaced by package updates. Saved profiles in `~/.diagram-design/profiles/` survive updates, and projects with a `.diagram-design` marker are unaffected. A distribution that ships [`profile-only.md`](skills/diagram-design/references/profile-only.md) treats even an editable checkout as immutable: branding is written only to home profiles and selected through project markers. Without that policy file, clone the repo and install the local path if you intentionally plan to customize the working style guide directly:
 
 ```bash
-git clone git@github.com:cathrynlavery/diagram-design.git ~/code/diagram-design
+git clone git@github.com:xp-song/diagram-design.git ~/code/diagram-design
 
 # Pi: register the checkout as a local package
 pi install ~/code/diagram-design
 
 # Claude Code: symlink the inner skill
 ln -s ~/code/diagram-design/skills/diagram-design ~/.claude/skills/diagram-design
+
+# Codex: use the same canonical skill directly through the documented user root
+mkdir -p ~/.agents/skills
+ln -s ~/code/diagram-design/skills/diagram-design ~/.agents/skills/diagram-design
 ```
 
 The shared skill lives at `skills/diagram-design/`. Pi discovers it through the repo's standard `skills/` package directory; Claude Code, Codex, Factory Droid, and other Agent Skills-compatible tools use the same files.
+
+### Explicit invocation
+
+Diagram Design is user-invoked only. Use the host's explicit skill surface; an ordinary matching prompt does not load it.
+
+| Host / installation | Invoke Diagram Design |
+|---|---|
+| Claude Code plugin | `/diagram-design:diagram-design <request>` |
+| Claude Code user skill | `/diagram-design <request>` |
+| Codex | `$diagram-design <request>` |
+| Pi | `/skill:diagram-design <request>` |
+| Factory Droid or another Agent Skills host | Select or invoke the `diagram-design` skill explicitly in that host, then provide the request. |
+
+Claude Code and Pi hide the description when they honor `disable-model-invocation`. Codex uses `allow_implicit_invocation: false` to keep the skill out of model context by default while preserving explicit selection. The runtime description remains compact for selectors and host compatibility.
 
 ---
 
@@ -176,7 +207,7 @@ Out of the box, diagrams render in a clean **jet-black + atomic-tangerine** pale
 ### The flow
 
 ```
-You:     "onboard diagram-design to https://yoursite.com"
+You:     [invoke Diagram Design] "onboard to https://yoursite.com"
 Agent:   → fetches the homepage
          → extracts the dominant palette + font stack
          → maps detected values to semantic roles:
@@ -228,7 +259,7 @@ See [`skills/diagram-design/references/onboarding.md`](skills/diagram-design/ref
 
 Onboard a brand once, save the result as a named profile, then add a `.diagram-design` marker containing `profile: <slug>` to each client project. Marker projects read `~/.diagram-design/profiles/<slug>.md` directly, so parallel workspaces can use different brands without overwriting a shared installed `style-guide.md`.
 
-The profile library is shared across Claude Code, Codex, Factory Droid, and Pi. Use `/diagram-design:profile` in Claude Code, `/profile` in Factory Droid or Pi, or ask in natural language in any host. See [`profiles.md`](skills/diagram-design/references/profiles.md) for the storage, marker, and recovery contract.
+The profile library is shared across Claude Code, Codex, Factory Droid, and Pi. Use `/diagram-design:profile` in Claude Code, `/profile` in Factory Droid or Pi, or explicitly invoke Diagram Design and request profile management. See [`profiles.md`](skills/diagram-design/references/profiles.md) for the storage, marker, and recovery contract.
 
 ---
 
@@ -238,14 +269,23 @@ The profile library is shared across Claude Code, Codex, Factory Droid, and Pi. 
 # From a cloned checkout, open the gallery to see all 39 diagrams
 open skills/diagram-design/assets/index.html       # macOS
 xdg-open skills/diagram-design/assets/index.html  # Linux
-
-# In Claude Code, Codex, Factory Droid, or Pi, ask:
-# "Make me an architecture diagram of my app: frontend, backend, database, Redis cache."
-# "I need a quadrant showing Q2 projects by impact vs effort."
-# "Give me a sequence of a bearer call with token refresh on 401."
-# (branching refresh uses the ALT combined-fragment grammar in type-sequence.md;
-#  see skills/diagram-design/assets/example-sequence-oauth.html — not a full authorize-code handshake)
 ```
+
+Invoke the skill explicitly in your agent host:
+
+```text
+# Claude Code plugin
+/diagram-design:diagram-design Make an architecture diagram of my app: frontend, backend, database, Redis cache.
+# Codex
+$diagram-design I need a quadrant showing Q2 projects by impact vs effort.
+# Pi
+/skill:diagram-design Give me a sequence of a bearer call with token refresh on 401.
+```
+
+The branching refresh example uses the ALT combined-fragment grammar in
+`type-sequence.md`; see
+`skills/diagram-design/assets/example-sequence-oauth.html`. It is not a full
+authorize-code handshake.
 
 Your agent will pick the right type, build the HTML, and save it. You can also start from a template directly:
 
@@ -279,7 +319,7 @@ Already have diagrams in draw.io / diagrams.net or Mermaid? Point the skill at t
 /diagram-design:import-mermaid architecture.mmd --size=slide-16x9 --detail=simplified
 ```
 
-Or just ask: *"redraw this drawio file for my deck"*, *"make this Mermaid block editorial"*, or *"この Mermaid をスライド用にきれいにして"*.
+Or explicitly invoke Diagram Design with a request such as *"redraw this drawio file for my deck"*, *"make this Mermaid block editorial"*, or *"この Mermaid をスライド用にきれいにして"*.
 
 Reads the common containers draw.io writes — `.drawio`, `.drawio.xml`, `.drawio.png` (embedded diagram), and `.drawio.svg` — including compressed payloads that look like base64 garbage in an editor.
 For Mermaid, it accepts `.mmd`, `.mermaid`, and one or more fenced `mermaid` blocks in Markdown. It parses text only: no rendering, JavaScript, browser, network, or followed click targets.
@@ -328,7 +368,7 @@ Diagrams ship as self-contained HTML, but you can export the diagram itself for 
 /diagram-design:export-diagram path/to/diagram.html --png-only --scale=3
 ```
 
-Or just ask in natural language:
+Or explicitly invoke Diagram Design with one of these requests:
 
 ```
 "Export this diagram as SVG and PNG."
@@ -350,9 +390,7 @@ Progressive disclosure. `SKILL.md` routes behavior first when needed, then layou
 
 ```
 diagram-design/
-├── .agents/plugins/marketplace.json — Codex marketplace catalog
 ├── .claude-plugin/                  — Claude marketplace + plugin manifest
-├── .codex-plugin/                   — Codex plugin manifest
 ├── .factory-plugin/                 — Factory Droid marketplace + plugin manifest
 ├── commands/
 │   ├── export-diagram.md            — plugin export command
@@ -368,6 +406,7 @@ diagram-design/
 ├── skills/
 │   └── diagram-design/
 │       ├── SKILL.md                 — philosophy, selection guide, checklist
+│       ├── agents/openai.yaml       — explicit-only Codex invocation policy
 │       ├── scripts/profile_state.py — safe profile + marker state helper
 │       ├── references/              — loaded only when a type or primitive is chosen
 │       │   ├── style-guide.md       — single source of truth for colors + fonts
@@ -422,7 +461,7 @@ diagram-design/
 │           ├── example-policy-trace-animated.html
 │           └── example-sequence-oauth*.html
 ├── scripts/
-│   ├── bump-plugin-version.py       — synchronized Claude/Codex/Factory version bump
+│   ├── bump-plugin-version.py       — synchronized Claude/Factory version bump
 │   ├── render-canonical-screenshots.py — deterministic 39-type PNG catalog renderer
 │   ├── verify-screenshot-freshness.py — source + screenshot digest gate
 │   ├── verify-plugin-package.py     — version + marketplace package gate
@@ -461,7 +500,7 @@ behavior, resource caps, named failures, and reference/command wiring.
 
 Label placement is gated geometrically: `python3 scripts/verify-geometry.py --all` fails CI when a label mask overlaps a node declared later in the document, because the node fill would clip the text at render time. `python3 scripts/test-verify-geometry.py` keeps that checker honest in both directions.
 Treemaps get a second geometric gate, because their whole claim is that area *is* the encoding: `python3 scripts/verify-treemap.py --all` fails CI when a cell's share of the drawn area doesn't match the value printed inside it, or when a label overruns the cell it names. It measures area error as a *relative* figure — an absolute one passes exactly the small cells most likely to be wrong. `python3 scripts/test-verify-treemap.py` keeps it honest in both directions.
-Docs and routing surfaces are themselves gated: `python3 scripts/verify-docs-sync.py` fails CI if the SKILL.md description loses a type's lexical hook, the gallery can't reach a shipped example, the README tree names a file that doesn't exist, a relative reference link is broken, a scanner-visible support path is not shipped inside the skill package, the immutable profile-only policy loses its routing, or any command/prompt surface drifts from its routed reference. `python3 scripts/test-verify-docs-sync.py` exercises those newer checks adversarially, including the strict-bundler behavior used by Hermes Agent. The skill also ships `skills/diagram-design/scripts/self_check.py` — a distilled output checker installed agents can run on generated diagrams — and `skills/diagram-design/scripts/profile_state.py`, which performs fd-relative no-follow profile/marker I/O for immutable distributions. `python3 scripts/test-self-check.py` and `python3 scripts/test-profile-state.py` keep both helpers honest. Settled design decisions (why one pinned controller, why patterns never add types, the autoplay policy, the SKILL.md byte cap, why label placement is verified geometrically, why client profiles use marker-first resolution, and why a controlled distribution can forbid working-copy writes) live as short ADRs in `docs/adr/` — read them before relitigating one, add one when you settle a new policy.
+Docs and routing surfaces are themselves gated: `python3 scripts/verify-docs-sync.py` enforces the compact runtime description, detailed marketplace discovery vocabulary, explicit-invocation guidance, gallery reachability, README tree, relative reference links, strict-bundler support paths, immutable profile-only routing, and command/prompt references. `python3 scripts/test-verify-docs-sync.py` exercises those checks adversarially, including the strict-bundler behavior used by Hermes Agent. The skill also ships `skills/diagram-design/scripts/self_check.py` — a distilled output checker installed agents can run on generated diagrams — and `skills/diagram-design/scripts/profile_state.py`, which performs fd-relative no-follow profile/marker I/O for immutable distributions. `python3 scripts/test-self-check.py` and `python3 scripts/test-profile-state.py` keep both helpers honest. Settled design decisions (why one pinned controller, why patterns never add types, the autoplay policy, the SKILL.md byte cap, explicit-only invocation, why label placement is verified geometrically, why client profiles use marker-first resolution, and why a controlled distribution can forbid working-copy writes) live as short ADRs in `docs/adr/` — read them before relitigating one, add one when you settle a new policy.
 
 All pull requests and pushes are automatically validated across Linux, Windows, and macOS runners via GitHub Actions CI (`.github/workflows/ci.yml`).
 
@@ -504,7 +543,7 @@ which is what a linter needs, but it is not what your reader sees. Run
 
 ### What loads when
 
-At startup, the agent sees only the skill name and description. When a request matches, it loads `SKILL.md`; semantic, type, and animation references are pulled in only when relevant.
+Diagram Design is explicit-only: invoke the skill by name when you want it. Claude Code and Pi can hide its description entirely; Codex keeps it out of model context by default when `allow_implicit_invocation: false`. Once invoked, the agent loads `SKILL.md`; semantic, type, and animation references are pulled in only when relevant.
 
 | You ask for… | Agent loads |
 |---|---|
@@ -527,7 +566,7 @@ No matter how many types exist, the agent only reads the one you need. Add a new
 
 ## It's working if…
 
-- A routine request ("make me a flowchart") loads `SKILL.md` plus exactly one type reference — nothing else.
+- After explicit invocation, a request such as "make me a flowchart" loads `SKILL.md` plus exactly one type reference — nothing else.
 - Before drawing, the agent states the chosen type, pattern, size, and planned cuts, then renders.
 - The output is one `.html` file that opens double-clicked, offline, with no network requests beyond Google Fonts.
 - Screen readers announce the diagram's title and description; `prefers-reduced-motion` shows the complete static frame.

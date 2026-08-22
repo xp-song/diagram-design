@@ -126,7 +126,7 @@ The examples intentionally do not include zero because the zero rule is validate
 The implementation will:
 
 1. Add `references/type-polar.md` and route “polar chart”, “radial lollipop”, “cyclical magnitude”, and equivalent requests to it.
-2. Add **Polar chart** to the SKILL.md visual-type guide and frontmatter description.
+2. Add **Polar chart** to the SKILL.md visual-type guide and detailed marketplace descriptions; keep the runtime description compact per ADR 0010.
 3. Change the shipped visual-type count from 27 to 28 across README, SKILL.md, onboarding/reference prose, validation scripts, and ADR 0002.
 4. Add the three examples to the gallery as `example-polar.html`, `example-polar-dark.html`, and `example-polar-full.html`.
 5. Add a README gallery cell and screenshot for the new type.
