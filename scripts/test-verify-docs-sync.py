@@ -82,6 +82,70 @@ def main() -> int:
         if errors != [expected]:
             raise AssertionError(f"broken reference was not reported: {errors}")
 
+        complete_discovery = (
+            "draw.io mermaid brand semantic patterns callouts motion sketchy"
+        )
+        if verify.missing_discovery_vocabulary(complete_discovery):
+            raise AssertionError("complete discovery vocabulary was rejected")
+        for label, aliases in verify.DISCOVERY_VOCABULARY.items():
+            mutated = complete_discovery
+            for alias in aliases:
+                mutated = mutated.replace(alias, "removed")
+            missing = verify.missing_discovery_vocabulary(mutated)
+            if missing != [label]:
+                raise AssertionError(
+                    f"missing discovery vocabulary was not isolated for {label}: {missing}"
+                )
+
+        for text, hook in (("treemap", "tree"), ("timeline", "line")):
+            if verify.contains_lexical_hook(text, hook):
+                raise AssertionError(
+                    f"substring collision {hook!r} was accepted inside {text!r}"
+                )
+        for text, hook in (("tree and treemap", "tree"), ("line and timeline", "line")):
+            if not verify.contains_lexical_hook(text, hook):
+                raise AssertionError(
+                    f"standalone discovery hook {hook!r} was not recognized in {text!r}"
+                )
+
+        for label, source, replacement in (
+            ("motion", "motion", "promotion"),
+            ("branding", "brand", "brandishing"),
+            ("Mermaid import", "mermaid", "mermaidesque"),
+        ):
+            mutated = complete_discovery.replace(source, replacement)
+            missing = verify.missing_discovery_vocabulary(mutated)
+            if missing != [label]:
+                raise AssertionError(
+                    f"substring collision did not isolate {label!r}: {missing}"
+                )
+
+        docs_root = Path(temp_dir) / "explicit-docs"
+        for relative in verify.EXPLICIT_POLICY_DOCS:
+            path = docs_root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            required = verify.REQUIRED_EXPLICIT_POLICY_PHRASES.get(relative, ())
+            path.write_text(
+                "Use detailed marketplace descriptions.\n"
+                + "\n".join(required)
+                + "\n",
+                encoding="utf-8",
+            )
+        errors = []
+        verify.check_explicit_invocation_docs(errors, docs_root)
+        if errors:
+            raise AssertionError(f"current invocation guidance failed: {errors}")
+        stale_path = docs_root / verify.EXPLICIT_POLICY_DOCS[0]
+        stale_path.write_text(
+            "\n".join(verify.REQUIRED_EXPLICIT_POLICY_PHRASES[stale_path.relative_to(docs_root)])
+            + "\nWhen a request matches, it loads `SKILL.md`\n",
+            encoding="utf-8",
+        )
+        errors = []
+        verify.check_explicit_invocation_docs(errors, docs_root)
+        if len(errors) != 1 or "stale runtime-description guidance" not in errors[0]:
+            raise AssertionError(f"stale invocation guidance was not rejected: {errors}")
+
         errors = []
         verify.check_skill_reference_links(
             errors,

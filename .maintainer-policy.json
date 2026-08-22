@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "repository": "cathrynlavery/diagram-design",
+  "repository": "xp-song/diagram-design",
   "base_branch": "main",
   "default_merge_method": "squash",
   "versioning": {
@@ -13,7 +13,7 @@
         "json_pointer": "/version"
       },
       {
-        "path": ".codex-plugin/plugin.json",
+        "path": ".factory-plugin/plugin.json",
         "json_pointer": "/version"
       }
     ],

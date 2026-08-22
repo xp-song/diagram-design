@@ -35,6 +35,11 @@ EXPORT_REF = ROOT / "skills/diagram-design/references/export.md"
 COMMAND = ROOT / "commands/import-drawio.md"
 FIXTURE = ROOT / "scripts/fixtures/sample-architecture.drawio"
 EXAMPLE = ROOT / "skills/diagram-design/assets/example-import-drawio.html"
+DETAILED_DESCRIPTION_FIELDS = (
+    (Path(".claude-plugin/plugin.json"), ("description",)),
+    (Path(".claude-plugin/marketplace.json"), ("description",)),
+    (Path(".factory-plugin/plugin.json"), ("description",)),
+)
 
 
 def fail(msg: str) -> None:
@@ -44,6 +49,33 @@ def fail(msg: str) -> None:
 
 def ok(msg: str) -> None:
     print(f"OK: {msg}")
+
+
+def find_json_key(node: object, key: str) -> str | None:
+    if isinstance(node, dict):
+        if isinstance(node.get(key), str):
+            return node[key]
+        for value in node.values():
+            found = find_json_key(value, key)
+            if found is not None:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = find_json_key(value, key)
+            if found is not None:
+                return found
+    return None
+
+
+def check_detailed_drawio_descriptions() -> None:
+    for relative, keys in DETAILED_DESCRIPTION_FIELDS:
+        document = json.loads((ROOT / relative).read_text(encoding="utf-8"))
+        for key in keys:
+            value = find_json_key(document, key)
+            if value is None or ".drawio" not in value.casefold():
+                fail(
+                    f"{relative.as_posix()} {key!r} does not mention draw.io import"
+                )
 
 
 def normalize_newlines(text: str) -> str:
@@ -482,8 +514,7 @@ def check_docs() -> None:
     ):
         if needle not in skill_text:
             fail(f"SKILL.md missing {needle!r}")
-    if ".drawio" not in skill_text.split("---")[1]:
-        fail("SKILL.md frontmatter description does not mention draw.io import")
+    check_detailed_drawio_descriptions()
 
     command_text = COMMAND.read_text(encoding="utf-8")
     for flag in ("--format", "--size", "--detail", "--audience", "--page", "--variant"):

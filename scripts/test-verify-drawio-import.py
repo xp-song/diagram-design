@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -57,7 +58,21 @@ def main() -> int:
                 f"stale slash command lacked a focused diagnostic:\n{stale.stderr}"
             )
 
-    print("OK: draw.io verifier rejects a stale slash command name")
+        reference.write_text(text, encoding="utf-8")
+        manifest_path = clone / ".claude-plugin/plugin.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["description"] = manifest["description"].replace(".drawio", ".source")
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        stale_description = run_verifier(clone)
+        if stale_description.returncode == 0:
+            raise AssertionError("missing marketplace draw.io hook unexpectedly passed")
+        if "does not mention draw.io import" not in stale_description.stderr:
+            raise AssertionError(
+                "missing marketplace hook lacked a focused diagnostic:\n"
+                f"{stale_description.stderr}"
+            )
+
+    print("OK: draw.io verifier rejects stale command and marketplace discovery")
     return 0
 
 

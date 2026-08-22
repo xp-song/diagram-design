@@ -367,7 +367,7 @@ Expected: both fail because SKILL.md still has 27 rows and the old heading.
 
 Make these exact routing changes:
 
-- Add `polar/radial lollipop` to the frontmatter description.
+- Add `polar/radial lollipop` to the detailed marketplace descriptions; keep the runtime description compact per ADR 0010.
 - Change `metadata.version` from `2.4` to `2.5`.
 - Change `Twenty-seven` and both numeric `27` references to `Twenty-eight`/`28`.
 - Rename the heading to `### Visual-type guide (28)`.
@@ -463,7 +463,7 @@ git commit -m "docs(polar): register the 28th visual type"
 - Modify: `.github/workflows/ci.yml:140-222`
 - Modify: `CONTRIBUTING.md:40-82`
 - Modify: `.claude-plugin/plugin.json`
-- Modify: `.codex-plugin/plugin.json`
+- Modify: `.factory-plugin/plugin.json`
 
 **Interfaces:**
 - Consumes: verifier/tests from Task 1 and examples from Task 2.
@@ -505,7 +505,7 @@ Run:
 
 ```bash
 python3 scripts/bump-plugin-version.py --minor
-jq -r '.version' .claude-plugin/plugin.json .codex-plugin/plugin.json
+jq -r '.version' .claude-plugin/plugin.json .factory-plugin/plugin.json
 ```
 
 Expected: both print `2.5.0`. If main advanced, the expected value is the next minor derived from the rebased synchronized version.
@@ -527,7 +527,7 @@ Expected: package checks pass, both versions are synchronized and increasing, pl
 ```bash
 git add \
   .github/workflows/ci.yml CONTRIBUTING.md \
-  .claude-plugin/plugin.json .codex-plugin/plugin.json
+  .claude-plugin/plugin.json .factory-plugin/plugin.json
 git commit -m "ci(polar): enforce quantitative chart contract"
 ```
 
