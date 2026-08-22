@@ -151,7 +151,7 @@ Run `/reload` in an open Pi session. Pi makes the skill available for matching d
 
 ### Editable install
 
-Managed installs are convenient, but changes to `references/style-guide.md` may be replaced by package updates. Saved profiles in `~/.diagram-design/profiles/` survive updates, and projects with a `.diagram-design` marker are unaffected. Clone the repo and install the local path if you plan to customize the working style guide directly:
+Managed installs are convenient, but changes to `references/style-guide.md` may be replaced by package updates. Saved profiles in `~/.diagram-design/profiles/` survive updates, and projects with a `.diagram-design` marker are unaffected. A distribution that ships [`profile-only.md`](skills/diagram-design/references/profile-only.md) treats even an editable checkout as immutable: branding is written only to home profiles and selected through project markers. Without that policy file, clone the repo and install the local path if you intentionally plan to customize the working style guide directly:
 
 ```bash
 git clone git@github.com:cathrynlavery/diagram-design.git ~/code/diagram-design
@@ -182,7 +182,8 @@ Agent:   → fetches the homepage
          → maps detected values to semantic roles:
              paper, ink, muted, accent, link
          → shows a proposed diff
-         → writes your tokens to references/style-guide.md
+         → writes a named profile to ~/.diagram-design/profiles/
+         → offers to select it with a project .diagram-design marker
 You:     "yes, apply it"
 ```
 
@@ -213,7 +214,7 @@ Every diagram template gives the inline SVG an accessible name and description: 
 
 ### Manual override
 
-Prefer to set tokens by hand? Open [`skills/diagram-design/references/style-guide.md`](skills/diagram-design/references/style-guide.md) and edit the table. Everything downstream reads from there — all 39 diagrams, the annotation primitive, and the gallery all inherit semantic role names (`accent`, not `#eb6c36`).
+Prefer to set tokens by hand? In a profile-only distribution, provide the tokens to onboarding and save them as a named home profile; the installed [`style-guide.md`](skills/diagram-design/references/style-guide.md) remains pristine. In an editable install without `profile-only.md`, you may edit that table directly. Everything downstream inherits semantic role names (`accent`, not `#eb6c36`).
 
 ### First-run gate
 
@@ -367,12 +368,14 @@ diagram-design/
 ├── skills/
 │   └── diagram-design/
 │       ├── SKILL.md                 — philosophy, selection guide, checklist
+│       ├── scripts/profile_state.py — safe profile + marker state helper
 │       ├── references/              — loaded only when a type or primitive is chosen
 │       │   ├── style-guide.md       — single source of truth for colors + fonts
 │       │   ├── semantic-patterns.md — behavior patterns independent of layout
 │       │   ├── animation.md         — optional motion + accessibility contract
 │       │   ├── onboarding.md        — the URL-to-tokens flow
 │       │   ├── profiles.md          — named client profiles + project markers
+│       │   ├── profile-only.md       — optional immutable-install override
 │       │   ├── import-drawio.md     — draw.io redraw procedure
 │       │   ├── import-mermaid.md    — Mermaid redraw procedure
 │       │   ├── output-spec.md       — format × size × detail level
@@ -458,7 +461,7 @@ behavior, resource caps, named failures, and reference/command wiring.
 
 Label placement is gated geometrically: `python3 scripts/verify-geometry.py --all` fails CI when a label mask overlaps a node declared later in the document, because the node fill would clip the text at render time. `python3 scripts/test-verify-geometry.py` keeps that checker honest in both directions.
 Treemaps get a second geometric gate, because their whole claim is that area *is* the encoding: `python3 scripts/verify-treemap.py --all` fails CI when a cell's share of the drawn area doesn't match the value printed inside it, or when a label overruns the cell it names. It measures area error as a *relative* figure — an absolute one passes exactly the small cells most likely to be wrong. `python3 scripts/test-verify-treemap.py` keeps it honest in both directions.
-Docs and routing surfaces are themselves gated: `python3 scripts/verify-docs-sync.py` fails CI if the SKILL.md description loses a type's lexical hook, the gallery can't reach a shipped example, the README tree names a file that doesn't exist, a relative reference link is broken, a scanner-visible support path is not shipped inside the skill package, or any command/prompt surface drifts from its routed reference. `python3 scripts/test-verify-docs-sync.py` exercises those newer checks adversarially, including the strict-bundler behavior used by Hermes Agent. The skill also ships `skills/diagram-design/scripts/self_check.py` — a distilled output checker installed agents can run on their own generated diagrams; `python3 scripts/test-self-check.py` keeps it honest. Settled design decisions (why one pinned controller, why patterns never add types, the autoplay policy, the SKILL.md byte cap, why label placement is verified geometrically, and why client profiles use marker-first resolution) live as short ADRs in `docs/adr/` — read them before relitigating one, add one when you settle a new policy.
+Docs and routing surfaces are themselves gated: `python3 scripts/verify-docs-sync.py` fails CI if the SKILL.md description loses a type's lexical hook, the gallery can't reach a shipped example, the README tree names a file that doesn't exist, a relative reference link is broken, a scanner-visible support path is not shipped inside the skill package, the immutable profile-only policy loses its routing, or any command/prompt surface drifts from its routed reference. `python3 scripts/test-verify-docs-sync.py` exercises those newer checks adversarially, including the strict-bundler behavior used by Hermes Agent. The skill also ships `skills/diagram-design/scripts/self_check.py` — a distilled output checker installed agents can run on generated diagrams — and `skills/diagram-design/scripts/profile_state.py`, which performs fd-relative no-follow profile/marker I/O for immutable distributions. `python3 scripts/test-self-check.py` and `python3 scripts/test-profile-state.py` keep both helpers honest. Settled design decisions (why one pinned controller, why patterns never add types, the autoplay policy, the SKILL.md byte cap, why label placement is verified geometrically, why client profiles use marker-first resolution, and why a controlled distribution can forbid working-copy writes) live as short ADRs in `docs/adr/` — read them before relitigating one, add one when you settle a new policy.
 
 All pull requests and pushes are automatically validated across Linux, Windows, and macOS runners via GitHub Actions CI (`.github/workflows/ci.yml`).
 

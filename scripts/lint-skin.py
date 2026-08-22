@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """Lint NEW and CHANGED diagram examples against the current visual skin.
 
-Pre-2.0 examples may legitimately fail because they were built against an older
-skin. Use ``--all --baseline`` to skip those documented legacy files.
+Pre-2.0 examples may legitimately fail visual-skin rules because they were built
+against an older skin. ``--all --baseline`` keeps safety and accessibility gates
+active while exempting only documented legacy visual findings.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import html
+import importlib.util
 import math
 import re
 import sys
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qsl, urlparse
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -23,6 +26,7 @@ STYLE_GUIDE = ROOT / "skills/diagram-design/references/style-guide.md"
 ASSET_DIR = ROOT / "skills/diagram-design/assets"
 BASELINE = ROOT / "scripts/lint-skin-baseline.txt"
 MOTION_TEMPLATE = ASSET_DIR / "template-motion.html"
+SELF_CHECK = ROOT / "skills/diagram-design/scripts/self_check.py"
 
 HEX_RE = re.compile(
     r"(?<![\w-])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})(?![0-9a-fA-F])"
@@ -37,13 +41,6 @@ SCRIPT_BLOCK_RE = re.compile(
     r"<script\b(?P<attrs>[^>]*)>(?P<body>.*?)</script\s*>",
     re.IGNORECASE | re.DOTALL,
 )
-SRC_HTTP_RE = re.compile(r"\bsrc\s*=\s*(['\"])\s*(?:https?:)?//", re.IGNORECASE)
-IMPORT_HTTP_RE = re.compile(
-    r"@import\s+(?:url\(\s*)?(?:['\"]\s*)?(?:https?:)?//", re.IGNORECASE
-)
-URL_HTTP_RE = re.compile(r"url\(\s*(?:['\"]\s*)?(?:https?:)?//", re.IGNORECASE)
-IMPORT_ANY_RE = re.compile(r"@import\b", re.IGNORECASE)
-URL_ANY_RE = re.compile(r"url\(\s*([^)]+?)\s*\)", re.IGNORECASE)
 LINK_RE = re.compile(r"<link\b[^>]*>", re.IGNORECASE | re.DOTALL)
 HREF_RE = re.compile(r"\bhref\s*=\s*(['\"])(.*?)\1", re.IGNORECASE | re.DOTALL)
 REL_RE = re.compile(r"\brel\s*=\s*(['\"])(.*?)\1", re.IGNORECASE | re.DOTALL)
@@ -78,6 +75,26 @@ def normalized_controller(body):
     return body.replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
+def packaged_safety_errors(source):
+    """Load the packaged checker so repository lint uses the same safety policy."""
+    spec = importlib.util.spec_from_file_location("diagram_design_self_check", SELF_CHECK)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load packaged self-check from {SELF_CHECK}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.safety_errors(source)
+
+
+def packaged_preflight_errors(source):
+    """Reject malformed source before either repository HTML parser sees it."""
+    spec = importlib.util.spec_from_file_location("diagram_design_self_check", SELF_CHECK)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load packaged self-check from {SELF_CHECK}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.ambiguous_markup_errors(source)
+
+
 def canonical_controller_digest():
     """Hash the one reviewed controller shipped by the motion template."""
     source = MOTION_TEMPLATE.read_text(encoding="utf-8")
@@ -91,7 +108,7 @@ def canonical_controller_digest():
 def google_fonts_families(url):
     """Return exact families from an approved Google Fonts css2 stylesheet."""
     try:
-        parsed = urlparse(url)
+        parsed = urlparse(html.unescape(url))
         port = parsed.port
     except ValueError:
         return set()
@@ -99,13 +116,22 @@ def google_fonts_families(url):
         parsed.scheme.casefold() != "https"
         or parsed.hostname is None
         or parsed.hostname.casefold() != "fonts.googleapis.com"
-        or port not in (None, 443)
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
         or parsed.path != "/css2"
         or parsed.fragment
     ):
         return set()
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    if not any(key == "family" and value for key, value in query):
+        return set()
+    if any(key not in {"family", "display"} for key, _value in query):
+        return set()
     families = set()
-    for value in parse_qs(parsed.query, keep_blank_values=True).get("family", []):
+    for key, value in query:
+        if key != "family":
+            continue
         family = value.split(":", 1)[0].strip()
         if family:
             families.add(family.casefold())
@@ -548,6 +574,9 @@ def named_families(value, allowed_fonts):
 def lint_text(
     text, colors, rgb_triplets, expected_slug, allow_template_placeholders=False
 ):
+    preflight_messages = packaged_preflight_errors(text)
+    if preflight_messages:
+        return [(1, 0, "external-asset", message) for message in preflight_messages]
     findings = lint_accessible_svgs(
         text, expected_slug, allow_template_placeholders
     )
@@ -575,6 +604,8 @@ def lint_text(
                 f"executable attribute {attr} on <{tag}> is not allowed",
             )
         )
+    for message in packaged_safety_errors(text):
+        findings.append((1, 0, "external-asset", message))
 
     def add(offset, category, message):
         findings.append((line_number(text, offset), offset, category, message))
@@ -635,18 +666,6 @@ def lint_text(
                     "script",
                     "motion controller must exactly match template-motion.html",
                 )
-
-    for match in SRC_HTTP_RE.finditer(text):
-        add(match.start(), "external-asset", "external HTTP(S) src is not allowed")
-
-    for match in IMPORT_ANY_RE.finditer(text):
-        add(match.start(), "external-asset", "CSS @import is not allowed")
-
-    for match in URL_ANY_RE.finditer(text):
-        value = match.group(1).strip().strip("'\"").strip()
-        if value.startswith("#"):
-            continue
-        add(match.start(), "external-asset", "non-fragment CSS url() is not allowed")
 
     for link_match in LINK_RE.finditer(text):
         href_match = HREF_RE.search(link_match.group())
@@ -709,7 +728,7 @@ def parse_args():
     parser.add_argument(
         "--baseline",
         action="store_true",
-        help="under --all, skip files listed in scripts/lint-skin-baseline.txt",
+        help="under --all, visually baseline listed files while retaining safety and a11y",
     )
     parser.add_argument(
         "--quiet", action="store_true", help="print only the summary line"
@@ -724,7 +743,7 @@ def main():
     args = parse_args()
     colors, rgb_triplets = allowed_colors()
 
-    skipped = 0
+    visually_baselined = 0
     baseline = set()
     if args.all:
         paths = sorted(
@@ -736,7 +755,7 @@ def main():
             for path in paths:
                 relative = display_path(path)
                 if path.name in baseline or relative in baseline:
-                    skipped += 1
+                    visually_baselined += 1
     else:
         paths = args.files
 
@@ -748,9 +767,17 @@ def main():
             expected_slug = diagram_slug(path)
             allow_template_placeholders = path.name.startswith("template")
             if args.baseline and (path.name in baseline or relative in baseline):
-                findings = lint_accessible_svgs(
-                    text, expected_slug, allow_template_placeholders
-                )
+                findings = [
+                    finding
+                    for finding in lint_text(
+                        text,
+                        colors,
+                        rgb_triplets,
+                        expected_slug,
+                        allow_template_placeholders,
+                    )
+                    if finding[2] in {"a11y", "external-asset", "script"}
+                ]
             else:
                 findings = lint_text(
                     text,
@@ -769,7 +796,7 @@ def main():
                 print(f"{shown_path}:{line}: {category}: {message}")
 
     print(
-        f"Summary: {len(paths)} file(s) checked, {skipped} skipped, "
+        f"Summary: {len(paths)} file(s) checked, {visually_baselined} visually baselined, "
         f"{total_findings} finding(s)."
     )
     return 1 if total_findings else 0

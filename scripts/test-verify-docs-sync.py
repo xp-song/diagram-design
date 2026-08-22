@@ -241,6 +241,74 @@ From a repository checkout, run `python3 <repo-root>/scripts/verify-geometry.py 
         if errors != [expected]:
             raise AssertionError(f"stale routing prompt was not reported: {errors}")
 
+        policy_root = Path(temp_dir) / "policy-repo"
+        policy_reference = (
+            policy_root / "skills/diagram-design/references/profile-only.md"
+        )
+        policy_reference.parent.mkdir(parents=True)
+        policy_reference.write_text(
+            "byte-for-byte unchanged\n"
+            "~/.diagram-design/profiles/<slug>.md\n"
+            "<project-root>/.diagram-design\n"
+            "Never fall back\n"
+            "Safe marker I/O\n"
+            "lies inside it\n"
+            "symbolic link\n"
+            "O_NOFOLLOW\n"
+            "os.replace\n"
+            "profile_state.py\n"
+            "--expect\n"
+            "--create\n",
+            encoding="utf-8",
+        )
+        policy_surfaces = (
+            policy_root / "skills/diagram-design/SKILL.md",
+            policy_root / "skills/diagram-design/references/onboarding.md",
+            policy_root / "skills/diagram-design/references/profiles.md",
+            policy_root / "commands/profile.md",
+            policy_root / "prompts/profile.md",
+            policy_root / "README.md",
+        )
+        for path in policy_surfaces:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("Follow profile-only.md.\n", encoding="utf-8")
+
+        errors = []
+        verify.check_profile_only_policy(errors, policy_root)
+        if errors:
+            raise AssertionError(f"valid profile-only routing failed: {errors}")
+
+        policy_surfaces[1].write_text("Stale onboarding writes.\n", encoding="utf-8")
+        errors = []
+        verify.check_profile_only_policy(errors, policy_root)
+        expected = (
+            "profile-only routing surface lost policy precedence: "
+            "skills/diagram-design/references/onboarding.md"
+        )
+        if errors != [expected]:
+            raise AssertionError(f"missing profile-only route was not reported: {errors}")
+
+        policy_surfaces[1].write_text("Follow profile-only.md.\n", encoding="utf-8")
+        policy_surfaces[3].write_text("Stale profile command.\n", encoding="utf-8")
+        errors = []
+        verify.check_profile_only_policy(errors, policy_root)
+        expected = (
+            "profile-only routing surface lost policy precedence: commands/profile.md"
+        )
+        if errors != [expected]:
+            raise AssertionError(f"stale profile command was not reported: {errors}")
+
+        policy_surfaces[3].write_text("Follow profile-only.md.\n", encoding="utf-8")
+        policy_reference.write_text(
+            policy_reference.read_text(encoding="utf-8").replace("O_NOFOLLOW", "follow links"),
+            encoding="utf-8",
+        )
+        errors = []
+        verify.check_profile_only_policy(errors, policy_root)
+        expected = "profile-only policy lost required contract text: 'O_NOFOLLOW'"
+        if errors != [expected]:
+            raise AssertionError(f"unsafe marker policy was not reported: {errors}")
+
         factory_manifest = root / ".factory-plugin/plugin.json"
         factory_marketplace = root / ".factory-plugin/marketplace.json"
         factory_manifest.parent.mkdir(parents=True)
@@ -421,7 +489,8 @@ diagram-design/
 
     print(
         "PASS: docs sync checks references, strict-bundler packaging, routing surfaces, "
-        "Factory install contract, type-count routing, and High-Level invariants"
+        "Factory install contract, type-count routing, High-Level invariants, "
+        "and profile-only policy"
     )
     return 0
 

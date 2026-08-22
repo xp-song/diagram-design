@@ -1,5 +1,10 @@
 # Client profiles
 
+> **Distribution override:** if [`profile-only.md`](profile-only.md) is present,
+> follow it before any verb or resolution step. The installed working copy is
+> immutable; home profiles plus consented project markers are the only state,
+> and every state read/write/delete must use its shipped `profile_state.py` helper.
+
 Named profiles let one Diagram Design install serve several clients without repeatedly editing the installed `style-guide.md`. A profile is a complete style guide stored outside the install, so managed plugin updates cannot erase it.
 
 This file is the source of truth for profile resolution and for the `save`, `load`/`switch`, `list`, `show`, `update`, `reset`, and `delete` verbs.
@@ -48,7 +53,8 @@ Except for the schema backfill described below, copy the body byte-for-byte. Sav
 
 ## Built-in `default`
 
-`default.md` is the recovery copy of the current package's pristine shipped `references/style-guide.md`.
+`default.md` is an immutable recovery snapshot of the pristine shipped
+`references/style-guide.md` from the package version that first seeded it.
 
 Before onboarding overwrites a pristine working copy, and again on the first `save` or `load`, check for `~/.diagram-design/profiles/default.md`. If it is absent:
 
@@ -60,7 +66,11 @@ Before onboarding overwrites a pristine working copy, and again on the first `sa
 
 If the working copy is already customized and no pristine current-package copy can be read, say that the default snapshot could not be created. Do not mislabel the custom skin as `default`. Saving another profile may continue, but `reset` is unavailable until a pristine package copy is available (for example, after reinstall/update); explain that limitation.
 
-When a newer skill schema adds required rows, refresh only the missing structure in `default.md` from the newer pristine shipped guide. Preserve existing rows and metadata dates except for `updated`.
+When a newer skill schema adds required rows, backfill only the missing structure
+in memory from the newer pristine shipped guide for the current generation.
+Never rewrite or delete the immutable `default.md`; a newly chosen non-default
+profile may persist the upgraded structure through the normal approval-token
+flow.
 
 ## Resolution before every generation
 
@@ -162,7 +172,7 @@ Re-save the current effective body over an existing named profile.
 
 1. Ensure and structurally check `default.md`.
 2. Follow the `load` procedure with slug `default`: update a controlling marker only with consent, otherwise copy the full default profile to the working copy.
-3. Verify the installed copy or marker selection and report that shipped defaults are active.
+3. Verify the installed copy or marker selection and report that the saved default snapshot is active, including its metadata date when present.
 
 ### `delete [slug]`
 
